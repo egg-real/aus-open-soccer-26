@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Network configuration for MaixCam (WE are not leaking our passwords)
+wpa_supplicant.conf
