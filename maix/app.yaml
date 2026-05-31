@@ -1,0 +1,9 @@
+files:
+  - camera.py
+  - main.py
+id: rcj_cv
+name: RCJ Ball Detect
+version: 1.0.0
+author: brendan-liang
+icon: ''
+desc: Simple RCJ ball detection with UART, made with OpenCV.

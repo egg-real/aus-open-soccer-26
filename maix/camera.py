@@ -1,5 +1,5 @@
 from maix import camera as _camera, uart as _uart, pinmap as _pinmap, image as _image, display as _display, time as _time
-from math import sin, cos, pi
+from math import sin, cos, pi, copysign
 
 
 class Camera():
@@ -63,7 +63,7 @@ class UART():
     def send_packet(self, has_ball:bool=True, ball_dir:int=128):
         packet = 0b0
         
-        sign_bit = bool((ball_dir/abs(ball_dir) + 1) / 2)
+        sign_bit = bool((copysign(1, ball_dir) + 1) / 2) # 0 for neg, 1 for pos
         num = min(abs(int(ball_dir)), 127)
         packet = ((packet + sign_bit) << 7) | num
 
