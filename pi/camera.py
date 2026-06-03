@@ -94,10 +94,10 @@ class Cameras():
         Returns variables processed from a block of data
         """
 
-        see_ball = block[0] & 0x01 > 0
-        see_goal = block[0] & 0x02 > 0
-        see_yellow = block[0] & 0x03 > 0
-        cam_ok = block[0] & 0x04 > 0
+        cam_ok = block[0] & 0x01 > 0
+        see_yellow = block[0] & 0x02 > 0
+        see_goal = block[0] & 0x04 > 0
+        see_ball = block[0] & 0x08 > 0
 
         ball_dir = Cameras._unpacksigned(block[1])
         ball_dist = block[2]
