@@ -1,9 +1,7 @@
-from lib.drive import Drive
-from time import sleep
+from camera import Cameras
 
-d = Drive()
+cams = Cameras(["/dev/ttyAMA0"], naive=True)
 
 while True:
-    direction = 0
-    speed = 0.1
-    d.move(0, 0.1)
+    ball_dir = cams.process()
+    print(ball_dir)
