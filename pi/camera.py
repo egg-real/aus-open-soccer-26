@@ -21,6 +21,13 @@ class Cameras():
         self._naive = naive
         self.running = True
 
+        self.ball_dir = None
+        self.ball_dist = None
+        self.yellow_goal_dir = None
+        self.yellow_goal_dist = None
+        self.blue_goal_dir = None
+        self.blue_goal_dist = None
+
         self._lock = threading.Lock()
         self._data = [0] * len(ports)
 
@@ -29,6 +36,23 @@ class Cameras():
             thread = threading.Thread(target=self._listen_port, args=(port, i), daemon=True)
             thread.start()
             self._threads.append(thread)
+
+    def get_ball_dir(self):
+        return self.ball_dir
+    
+    def get_ball_dist(self):
+        return self.ball_dist
+    
+    def get_yellow_goal_dir(self):
+        return self.yellow_goal_dir
+    def get_yellow_goal_dist(self):
+        return self.yellow_goal_dist
+    
+    def get_blue_goal_dir(self):
+        return self.blue_goal_dir
+    
+    def get_blue_goal_dist(self):
+        return self.blue_goal_dist
 
     @staticmethod
     def _unpacksigned(byte:int):
@@ -65,7 +89,7 @@ class Cameras():
                 self._data[cam_index] = body
 
     @staticmethod
-    def _proccess_block(block):
+    def _process_block(block):
         """
         Returns variables processed from a block of data
         """
@@ -83,18 +107,51 @@ class Cameras():
 
         goal_dir = Cameras._unpacksigned(block[5])
         goal_dist = block[6]
+
+        return see_ball, see_goal, see_yellow, cam_ok, ball_dir, ball_dist, wall_dir, wall_dist, goal_dir, goal_dist
     
     def process(self):
             
         # Process new data in queue
         data = []
         with self._lock:
-            data = self._data[:]
+            data = self._data.copy()
         
         # Naive:
         if self._naive:
             ball_dir = self._unpacksigned(data[0])
             return ball_dir
+
+        ball_spotted = False
+        yellow_goal_spotted = False
+        blue_goal_spotted = False
         
-        for block in data:
-            self._proccess_block(block)
+        for i in range(len(data)):
+            block = data[i]
+            see_ball, see_goal, see_yellow, cam_ok, ball_dir, ball_dist, wall_dir, wall_dist, goal_dir, goal_dist = self._process_block(block)
+            if not cam_ok:
+                print(f"CAMERA {i} NOT OK")
+                continue
+            if see_ball:
+                self.ball_dir = ball_dir + i * 90
+                self.ball_dist = ball_dist
+                ball_spotted = True
+            if see_goal:
+                if see_yellow:
+                    yellow_goal_spotted = True
+                    self.yellow_goal_dir = goal_dir + i * 90
+                    self.yellow_goal_dist = goal_dist
+                else:
+                    blue_goal_spotted = True
+                    self.blue_goal_dir = goal_dir + i * 90
+                    self.blue_goal_dist = goal_dist
+        
+        if not ball_spotted:
+            self.ball_dir = None
+            self.ball_dist = None
+        if not yellow_goal_spotted:
+            self.yellow_goal_dir = None
+            self.yellow_goal_dist = None
+        if not blue_goal_spotted:
+            self.blue_goal_dir = None
+            self.blue_goal_dist = None
