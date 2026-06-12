@@ -1,7 +1,9 @@
 import math
 from camera import Cameras
+from lib.drive import Drive
 
 cams = Cameras()
+drive = Drive()
 
 while True:
     cams.process()
@@ -26,5 +28,8 @@ while True:
         elif ball_dist > 500:
             speed = 800
         direction += offset
+        direction = direction % 360
+        drive.move(direction, speed)
+
     else:
         print("Ball not found")
