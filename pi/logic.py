@@ -3,52 +3,31 @@ import math
 import time
 from enum import Enum
 import json
+from lib.dribbler import Dribbler
 from lib.drive import Drive
 from camera import Cameras
 
 # low level stuff done by copilot
 
 # ----- Main Thing ----- #
-class PID():
-    def __init__(self, kp, ki, kd):
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-
-        self.integral = 0
-        self.error_prev = 0
-    
-    def update(self, error, dt):
-        proportional = error * self.kp
-        self.integral = (self.integral + error * dt) * self.ki
-        derivative = (error - self.error_prev) / dt * self.kd
-        
-        self.error_prev = error
-
-        return proportional + self.integral + derivative
-
 class bot_states(Enum):
         # Add more later
         NONE = -1
         NO_SEE_BALL = 0
         CHASING_BALL = 1
 
-
-class attack_bot():
+class AttackBot():
 
     def on_startup(self):
         # Load motor config
         with open("config.json") as f:
             config = json.load(f)
         
-        # Constants (from config.json)
+        # Constants
         self.BASE_BALL_CHASE_SPD = 0.3
         self.HEAD_TO_GOAL_SPD = 0.4
         self.HEAD_TO_OWN_GOAL_SPD = 0.2
         self.BALL_ORBIT_RADIUS = 300  # (mm if pixel-to-mm conversion is accurate, if not might be an arbitrary number)
-        
-        ## Control
-        self.YAW_CORRECT_SPD = 0.1
 
         # Toggles
         self.can_detect_possession = False
@@ -63,7 +42,8 @@ class attack_bot():
 
         # Initialize hardware interfaces
         self.drive = Drive()  # Motor controller
-        self.cameras = Cameras(["/dev/ttyAMA0"], naive=True)  # Vision system
+        self.cameras = Cameras(["/dev/ttyAMA0"])  # Vision system
+        self.dribbler = Dribbler()
 
         # Variables
         ## Time
@@ -74,7 +54,6 @@ class attack_bot():
         self.move_spd = 0.3  # 0-1 normalized speed
         self.move_dir = 0
         self.rot_dir = 0
-        self.yaw_correct_PID = PID(1, 0, 0)
 
         ## Bot data
         self.bot_dir = 0  # Compass sensor
@@ -96,7 +75,7 @@ class attack_bot():
         self.dt = time.monotonic() - self.last_time
         self.last_time = time.monotonic()
         
-        # Update sensor data
+        # Update camera data
         self.ball_dir = self.cameras.get_ball_dir() or self.ball_dir
         self.ball_dist = self.cameras.get_ball_dist() or self.ball_dist
         self.goal_dir = self.cameras.get_blue_goal_dir() or self.goal_dir
@@ -107,6 +86,7 @@ class attack_bot():
 
         # Logic
         if self.have_ball:
+            self.dribble()
             if self.see_goal:
                 self.move_dir = self.goal_dir
             else:
@@ -138,15 +118,11 @@ class attack_bot():
 
     def execute_movement(self):
         """Convert move_dir and move_spd into Drive commands"""
-        # Normalize movement direction to radians for Drive.move()
-        x = np.sin(np.radians(self.move_dir)) * self.move_spd
-        y = np.cos(np.radians(self.move_dir)) * self.move_spd
         
-        self.drive.move(x, y, 0)  # Assuming Drive.move(x, y, rotation)
+        self.drive.move(self.move_dir, self.move_spd, self.rot_dir)
 
-    def yaw_correct(self, target_angle):
-        error = target_angle - self.bot_dir
-        self.yaw_correct_PID.update(error, self.dt)
+    def dribble(self):
+        self.dribbler.set_speed(1.0)
 
     def kick(self):
         pass
@@ -172,7 +148,7 @@ class attack_bot():
 
 
 if __name__ == "__main__":
-    bot1 = attack_bot()
+    bot1 = AttackBot()
     bot1.on_startup()
     
     try:
