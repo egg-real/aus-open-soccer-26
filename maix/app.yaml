@@ -1,9 +1,11 @@
 files:
   - camera.py
   - main.py
-id: rcj_cv
+  - model.cvimodel
+  - model.mud
+id: rcj_uart_ai
 name: RCJ Ball Detect
-version: 1.0.1
+version: 1.1.1
 author: brendan-liang
 icon: ''
-desc: RCJ ball, goal and wall detection with UART, made with OpenCV.
+desc: RCJ ball, goal and wall detection with UART, made with MaixHub AI.

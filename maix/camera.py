@@ -53,8 +53,7 @@ class UART():
     def _write(self, msg):
         if not self.uart.is_open():
             return False
-        
-        print("[debug] wrote " + bin(int.from_bytes(msg)))
+        # print("[debug] wrote " + bin(int.from_bytes(msg, "big")))
         self.uart.write(msg)    
         _time.sleep_ms(5)
         
@@ -63,7 +62,8 @@ class UART():
     @staticmethod
     def _packsigned(num):
         sign_bit = bool((copysign(1, num) + 1) / 2)
-        num = min(abs(int(num)), 127)
+        # 0xff is reserved as the packet start flag, so avoid it in data bytes.
+        num = min(abs(int(num)), 126 if sign_bit else 127)
         return ((sign_bit) << 7) | num
     
     def send_packet(self, see_ball:bool=False, ball_dir:int=0, ball_dist:int=0,
@@ -79,8 +79,8 @@ class UART():
                     | (min(ball_dist, 127) << 32)
                     | (self._packsigned(wall_dir) << 24)
                     | (min(wall_dist, 127) << 16)
-                    | (self._packsigned(goal_dist) << 8)
+                    | (self._packsigned(goal_dir) << 8)
                     | (min(goal_dist, 127))
                    )
 
-        self._write(packet.to_bytes(8))
+        self._write(packet.to_bytes(8, "big"))
