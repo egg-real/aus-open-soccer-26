@@ -50,23 +50,37 @@ class UART():
 
         print("\n\n!!!PORT!!!: " + self.uart.get_port() + "\n\n")
     
-    def _write(self, msg=0b00000000.to_bytes(1)):
+    def _write(self, msg):
         if not self.uart.is_open():
             return False
         
         print("[debug] wrote " + bin(int.from_bytes(msg)))
-        self.uart.write(msg)
+        self.uart.write(msg)    
         _time.sleep_ms(5)
         
         return True
     
-    def send_packet(self, has_ball:bool=True, ball_dir:int=128):
-        packet = 0b0
-        
-        sign_bit = bool((copysign(1, ball_dir) + 1) / 2) # 0 for neg, 1 for pos
-        num = min(abs(int(ball_dir)), 127)
-        packet = ((packet + sign_bit) << 7) | num
+    @staticmethod
+    def _packsigned(num):
+        sign_bit = bool((copysign(1, num) + 1) / 2)
+        num = min(abs(int(num)), 127)
+        return ((sign_bit) << 7) | num
+    
+    def send_packet(self, see_ball:bool=False, ball_dir:int=0, ball_dist:int=0,
+                    see_goal:bool=False, yellow_goal:bool=False, goal_dir:int=0, goal_dist:int=0,
+                    wall_dir:int=0, wall_dist:int=0,
+                    cam_ok:bool=True):
 
-        # packet = (packet << 1) + has_ball
+        info_byte = 0x08 * see_ball + 0x04 * see_goal + 0x02 * yellow_goal + 0x01 * cam_ok
 
-        self._write(packet.to_bytes((packet.bit_length() + 7) // 8))
+        packet = ((0xff << 56)
+                    | (info_byte << 48) 
+                    | (self._packsigned(ball_dir) << 40)
+                    | (min(ball_dist, 127) << 32)
+                    | (self._packsigned(wall_dir) << 24)
+                    | (min(wall_dist, 127) << 16)
+                    | (self._packsigned(goal_dist) << 8)
+                    | (min(goal_dist, 127))
+                   )
+
+        self._write(packet.to_bytes(8))
