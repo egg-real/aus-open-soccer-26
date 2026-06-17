@@ -15,5 +15,5 @@ Why? Because our cameras (Sipeed MaixCams) process images on their own boards, a
 | wall_distance  | unsigned int | 8 bits                       | cm      | Rough distance to the closest wall                                                  |
 | goal_direction | signed int   | 8 bits                       | degrees | Signed angle from the centre to the goal if applicable (1 bit sign, 7 bits integer) |
 | goal_distance  | unsigned int | 8 bits                       | cm      | Rough distance to the closest wall                                                  |
-| line_i         | list         | unlimited, 16 bits each line | cm      | A list of equations of lines in the form y=mx+c, where the first 8 bits represent m and the next 8 represent c. (0,0) is the bottom left corner where the white lines meet from the bot's perspective facing forward. Forward is postive y and right is positive x.
+| lines          | list         | unlimited, 16 bits each line | cm      | A list of equations of lines in the form y=mx+c, where the first 8 bits represent m and the next 8 represent c. If m is 254, the line is vertical and points up, so c is the x-axis value of the line. (0,0) is the bottom left corner where the white lines meet from the bot's perspective facing forward. Forward is postive y and right is positive x.
 
