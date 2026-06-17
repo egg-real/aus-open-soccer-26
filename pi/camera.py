@@ -27,6 +27,7 @@ class Cameras():
         self.yellow_goal_dist = None
         self.blue_goal_dir = None
         self.blue_goal_dist = None
+        self.lines = []
 
         self._lock = threading.Lock()
         self._data = [None] * len(ports)
@@ -54,6 +55,9 @@ class Cameras():
     def get_blue_goal_dist(self):
         return self.blue_goal_dist
 
+    def get_lines(self):
+        return self.lines
+
     @staticmethod
     def _unpacksigned(byte:int):
         return ((byte & 0x80 > 0) * 2 - 1) * (byte & 0x7f)
@@ -71,21 +75,20 @@ class Cameras():
                     self._data[cam_index] = res[0]
             return
 
+        while port.read(1)[0] != 0xff:
+            continue
+
+        body = bytearray()
         while self.running:
-            res = port.read(8)
-            body = res[1:]
-            if res[0] != 0xff:
-                # read must have shifted
-                # find start flag block in rest of res
-                for i, block in enumerate(res[1:], 1):
-                    if block == 0xff:
-                        # read off rest
-                        rest = port.read(i)
-                        body = res[i:] + rest
-                        break
-            print(body)
-            with self._lock:
-                self._data[cam_index] = body
+            byte = port.read(1)[0]
+            if byte == 0xff:
+                if len(body) > 0:
+                    # print(bytes(body))
+                    with self._lock:
+                        self._data[cam_index] = bytes(body)
+                    body.clear()
+                continue
+            body.append(byte)
 
     @staticmethod
     def _process_block(block):
@@ -132,7 +135,32 @@ class Cameras():
         goal_dir = Cameras._unpacksigned(block[5])
         goal_dist = block[6]
 
-        return see_ball, see_goal, see_yellow, cam_ok, ball_dir, ball_dist, wall_dir, wall_dist, goal_dir, goal_dist
+        lines = []
+        for i in range(7, len(block) - 1, 2):
+            if block[i] == 254:
+                lines.append((254, Cameras._unpacksigned(block[i + 1])))
+                continue
+
+            lines.append((
+                Cameras._unpacksigned(block[i]),
+                Cameras._unpacksigned(block[i + 1]),
+            ))
+
+        filtered_lines = []
+        min_separation = 10
+
+        for new_line in lines:
+            add_line = True
+            for existing_line in filtered_lines:
+                if abs(new_line[0] - existing_line[0]) < min_separation and abs(new_line[1] - existing_line[1]) < min_separation:
+                    add_line = False
+                    break
+            if add_line:
+                filtered_lines.append(new_line)
+
+        lines = filtered_lines
+
+        return see_ball, see_goal, see_yellow, cam_ok, ball_dir, ball_dist, wall_dir, wall_dist, goal_dir, goal_dist, lines
 
     def process(self):
 
@@ -149,15 +177,17 @@ class Cameras():
         ball_spotted = False
         yellow_goal_spotted = False
         blue_goal_spotted = False
+        lines = []
 
         for i in range(len(data)):
-            if data[i] is None:
+            if data[i] is None or len(data[i]) < 7:
                 continue
             block = data[i]
-            see_ball, see_goal, see_yellow, cam_ok, ball_dir, ball_dist, wall_dir, wall_dist, goal_dir, goal_dist = self._process_block(block)
+            see_ball, see_goal, see_yellow, cam_ok, ball_dir, ball_dist, wall_dir, wall_dist, goal_dir, goal_dist, block_lines = self._process_block(block)
             if not cam_ok:
                 print(f"CAMERA {i} NOT OK")
                 continue
+            lines.extend(block_lines)
             if see_ball:
                 self.ball_dir = ball_dir + i * 90
                 self.ball_dist = ball_dist
@@ -181,3 +211,4 @@ class Cameras():
         if not blue_goal_spotted:
             self.blue_goal_dir = None
             self.blue_goal_dist = None
+        self.lines = lines
