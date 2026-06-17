@@ -21,8 +21,15 @@ class Cameras():
         self._naive = naive
         self.running = True
 
+        self.ball_dir = None
+        self.ball_dist = None
+        self.yellow_goal_dir = None
+        self.yellow_goal_dist = None
+        self.blue_goal_dir = None
+        self.blue_goal_dist = None
+
         self._lock = threading.Lock()
-        self._data = [0] * len(ports)
+        self._data = [None] * len(ports)
 
         for i, port in enumerate(ports):
             # i: N = 0, E = 1, S = 2, W = 3
@@ -30,17 +37,33 @@ class Cameras():
             thread.start()
             self._threads.append(thread)
 
+    def get_ball_dir(self):
+        return self.ball_dir
+
+    def get_ball_dist(self):
+        return self.ball_dist
+
+    def get_yellow_goal_dir(self):
+        return self.yellow_goal_dir
+    def get_yellow_goal_dist(self):
+        return self.yellow_goal_dist
+
+    def get_blue_goal_dir(self):
+        return self.blue_goal_dir
+
+    def get_blue_goal_dist(self):
+        return self.blue_goal_dist
+
     @staticmethod
     def _unpacksigned(byte:int):
         return ((byte & 0x80 > 0) * 2 - 1) * (byte & 0x7f)
-        
+
     def _listen_port(self, port_name:str, cam_index:int):
         print(f"Opening port {port_name}")
         port = serial.Serial(port_name, baudrate=115200)
-        
+
         while not port.is_open:
             continue
-
         if self._naive:
             while self.running:
                 res = port.read(1)
@@ -60,12 +83,12 @@ class Cameras():
                         rest = port.read(i)
                         body = res[i:] + rest
                         break
-
+            print(body)
             with self._lock:
                 self._data[cam_index] = body
 
     @staticmethod
-    def _proccess_block(block):
+    def _process_block(block):
         """
         Returns variables processed from a block of data
         
@@ -95,11 +118,10 @@ class Cameras():
         cam_ok
             bool: if the camera is running ok (False may suggest some camera error that needs to be addressed)
         """
-
-        see_ball = block[0] & 0x01 > 0
-        see_goal = block[0] & 0x02 > 0
-        goal_yellow = block[0] & 0x03 > 0
-        cam_ok = block[0] & 0x04 > 0
+        cam_ok = block[0] & 0x01 > 0
+        see_yellow = block[0] & 0x02 > 0
+        see_goal = block[0] & 0x04 > 0
+        see_ball = block[0] & 0x08 > 0
 
         ball_dir = Cameras._unpacksigned(block[1])
         ball_dist = block[2]
@@ -110,52 +132,52 @@ class Cameras():
         goal_dir = Cameras._unpacksigned(block[5])
         goal_dist = block[6]
 
-        return (see_ball, ball_dir, ball_dist,
-                see_goal, goal_dir, goal_dist, goal_yellow,
-                wall_dir, wall_dist,
-                cam_ok)
-    
+        return see_ball, see_goal, see_yellow, cam_ok, ball_dir, ball_dist, wall_dir, wall_dist, goal_dir, goal_dist
+
     def process(self):
-            
+
         # Process new data in queue
         data = []
         with self._lock:
-            data = self._data[:]
-        
+            data = self._data.copy()
+        # print(data)
         # Naive:
         if self._naive:
             ball_dir = self._unpacksigned(data[0])
             return ball_dir
-        
-        # Take all data
-        ball_locations = []
-        ball_dists = []
 
-        ygoal_dirs = []
-        ygoal_dists = []
+        ball_spotted = False
+        yellow_goal_spotted = False
+        blue_goal_spotted = False
 
-        bgoal_dirs = []
-        bgoal_dists = []
-
-        wall_dirs = []
-        wall_dists = []
-
-        for i, block in enumerate(data):
-            see_ball, ball_dir, ball_dist,\
-                see_goal, goal_dir, goal_dist, goal_yellow,\
-                wall_dir, wall_dist, cam_ok = self._proccess_block(block)
+        for i in range(len(data)):
+            if data[i] is None:
+                continue
+            block = data[i]
+            see_ball, see_goal, see_yellow, cam_ok, ball_dir, ball_dist, wall_dir, wall_dist, goal_dir, goal_dist = self._process_block(block)
             if not cam_ok:
-                print(f"[WARNING] maix{"nesw"[i]} not ok")
+                print(f"CAMERA {i} NOT OK")
+                continue
             if see_ball:
-                ball_locations.append((ball_dir + 90*i) % 360)
-                ball_dists.append(ball_dist)
+                self.ball_dir = ball_dir + i * 90
+                self.ball_dist = ball_dist
+                ball_spotted = True
             if see_goal:
-                if goal_yellow:
-                    ygoal_dirs.append((goal_dir + 90*i) % 360)
-                    ygoal_dists.append(goal_dist)
+                if see_yellow:
+                    yellow_goal_spotted = True
+                    self.yellow_goal_dir = goal_dir + i * 90
+                    self.yellow_goal_dist = goal_dist
                 else:
-                    bgoal_dirs.append((goal_dir + 90*i) % 360)
-                    bgoal_dists.append(goal_dist)
+                    blue_goal_spotted = True
+                    self.blue_goal_dir = goal_dir + i * 90
+                    self.blue_goal_dist = goal_dist
 
-        # Pick the best data
-        
+        if not ball_spotted:
+            self.ball_dir = None
+            self.ball_dist = None
+        if not yellow_goal_spotted:
+            self.yellow_goal_dir = None
+            self.yellow_goal_dist = None
+        if not blue_goal_spotted:
+            self.blue_goal_dir = None
+            self.blue_goal_dist = None
