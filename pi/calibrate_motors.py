@@ -6,9 +6,11 @@ import struct
 import busio
 import select
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
+from lib import config
 
 # Initialize variables
 motor = [None] * 8
+motor_address = [None] * 8
 motormode = [0] * 8
 motorcount = 0
 setupmotorcount = 0
@@ -31,6 +33,20 @@ def read_input():
         return sys.stdin.readline().strip()
     return None
 
+def save_motor_calibration(address, elec_angle_offset, sin_cos_centre):
+    motors_config = config.get_value("motors", {})
+
+    for name, motor_config in motors_config.items():
+        if motor_config.get("address") == address:
+            motor_config["elec_angle_offset"] = elec_angle_offset
+            motor_config["sin_cos_centre"] = sin_cos_centre
+            config.set_value("motors", motors_config)
+            config.save_config()
+            print(f"Saved calibration for {name} motor to config.json")
+            return
+
+    print(f"Warning: no motor in config.json has address {address}; calibration was not saved.")
+
 # Initialize I2C
 i2c = busio.I2C(board.SCL, board.SDA)
 
@@ -48,6 +64,7 @@ while setupmotorcount < motorcount:
     if tempuint32 <= 7 or tempuint32 >= 120:
         print("Error invalid i2c address, please reboot microcontroller to try again.")
         quit()
+    motor_address[setupmotorcount] = tempuint32
     motor[setupmotorcount] = PowerfulBLDCDriver(i2c, tempuint32)
     
     print(f"The firmware version of motor driver number {setupmotorcount} is: {motor[setupmotorcount].get_firmware_version()}")
@@ -78,8 +95,11 @@ while setupmotorcount < motorcount:
         sys.stdout.flush()
         time.sleep(0.5)
     print()  # print out the calibration results
-    print(f"ELECANGLEOFFSET: {motor[setupmotorcount].get_calibration_ELECANGLEOFFSET()}")
-    print(f"SINCOSCENTRE: {motor[setupmotorcount].get_calibration_SINCOSCENTRE()}")
+    elec_angle_offset = motor[setupmotorcount].get_calibration_ELECANGLEOFFSET()
+    sin_cos_centre = motor[setupmotorcount].get_calibration_SINCOSCENTRE()
+    print(f"ELECANGLEOFFSET: {elec_angle_offset}")
+    print(f"SINCOSCENTRE: {sin_cos_centre}")
+    save_motor_calibration(motor_address[setupmotorcount], elec_angle_offset, sin_cos_centre)
 
     motor[setupmotorcount].configure_operating_mode_and_sensor(3, 1)  # configure FOC mode and sin/cos encoder
     motor[setupmotorcount].configure_command_mode(12)  # configure speed command mode

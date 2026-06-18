@@ -2,7 +2,7 @@ import json
 
 # globals
 
-config_file = "config.json"
+config_file = "/home/dsa/Robotics/config.json"
 _globals = {}
 
 def load_config():

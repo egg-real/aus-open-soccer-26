@@ -22,7 +22,7 @@ class Motor:
                  sin_cos_centre: int = 1251,
                  operating_mode_and_sensor: tuple[int] = (3, 1),
                  command_mode: int = 12,
-                 max_speed: int = None):
+                 max_speed: int = MAX_SPEED):
         self.i2c_address = address
         self.bus = smbus2.SMBus(bus_number)
         self.QDRformat = 0
@@ -34,10 +34,9 @@ class Motor:
         self.set_speed_PID_constants(*speed_PID_constants)
         self.set_elec_angle_offset(elec_angle_offset)
         self.set_sin_cos_centre(sin_cos_centre)
+        self.set_speed_limit(max_speed)
         self.configure_operating_mode_and_sensor(*operating_mode_and_sensor)
         self.configure_command_mode(command_mode)
-        
-        self.max_speed = max_speed if max_speed is not None else MAX_SPEED
 
     def set_speed(self, speed: int):
         try:
@@ -79,6 +78,14 @@ class Motor:
             self.bus.write_byte_data(self.i2c_address, 0x21, commandmode)
         except Exception as e:
             print(f"Error configuring Command Mode: {e}")
+
+    def set_speed_limit(self, speed_limit):
+        try:
+            self.max_speed = abs(speed_limit)
+            data = struct.pack("<i", self.max_speed)
+            self.bus.write_i2c_block_data(self.i2c_address, 0x34, list(data))
+        except Exception as e:
+            print(f"Error setting Speed Limit: {e}")
 
     def set_torque(self, torque):
         try:

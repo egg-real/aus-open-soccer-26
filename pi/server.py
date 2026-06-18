@@ -20,7 +20,7 @@ def move_handler(websocket, data):
         move_mag = min(np.hypot(x, y), 0.5)
         move_rot = rot
 
-        d.move(move_dir, move_mag)
+        d.move(move_dir, move_mag, move_rot)
 
 interface = WSServer()
 interface.add_handler("move", move_handler)
