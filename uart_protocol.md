@@ -51,11 +51,3 @@ The payload must be a complete JPEG: it starts with `0xFF 0xD8` and ends with `0
 In **debug** mode, JPEG quality is reduced to keep frames small enough for web debugging over UART. In **training** mode, JPEG quality is set to full quality and the pi saves every received frame to disk as fast as the UART connection allows.
 
 Note: at 115200 baud the link carries only ~14 KB/s, so image streaming runs well under 1 fps unless frames are very small.
-
-## Pi helper scripts
-
-- `python pi/save_training_video.py --output training_images`: puts every configured camera into **training** mode and saves each received JPEG frame into the output folder. Despite the script name, the UART protocol sends individual `.jpg` files rather than a video container. Use `--duration SECONDS` for a timed capture, or Ctrl-C to stop.
-- `python pi/stream.py --host 0.0.0.0 --port 8000 --quality 60`: puts every configured camera into **debug** mode at the requested JPEG quality and serves a lightweight web UI. Visit `/` for all streams, `/stream/<camera>.mjpg` for a per-camera MJPEG stream, or `/latest/<camera>.jpg` for the latest frame.
-
-Both scripts instantiate all default Pi camera ports unless `--ports` is provided, and both call `Cameras.deinit()` on exit so cameras are commanded back to idle.
-
