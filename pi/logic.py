@@ -58,6 +58,7 @@ class AttackBot():
         # Initialize hardware interfaces
         self.drive = Drive()  # Motor controller
         self.cameras = Cameras(["/dev/ttyAMA0"])  # Vision system
+        self.cameras.start_streaming()
         self.dribbler = Dribbler()
 
         # Variables

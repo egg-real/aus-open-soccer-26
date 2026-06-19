@@ -1,6 +1,7 @@
 from camera import Cameras
 
-cams = Cameras(["/dev/ttyAMA0"])
+cams = Cameras()
+cams.start_streaming()
 
 while True:
     cams.process()

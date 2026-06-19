@@ -1,14 +1,42 @@
 import threading
 import queue
+import atexit
 import serial
+import time
+from pathlib import Path
+
+
+# ---- Pi -> Maix control protocol ----
+# Sent to a camera as [CMD_FRAME_MARKER, command]. Debug includes a quality byte:
+# [CMD_FRAME_MARKER, CMD_DEBUG, quality].
+# Keep these values in sync with maix/camera.py.
+CMD_FRAME_MARKER = 0xAA
+CMD_STOP = 0x00     # stop streaming, go idle
+CMD_DETECT = 0x01   # stream detection packets (the existing behaviour)
+CMD_DEBUG = 0x02    # broadcast JPEG frames for web streaming/debugging
+CMD_TRAINING = 0x03 # broadcast full-quality JPEG frames for training capture
+
+# ---- Maix -> Pi image framing ----
+# An image frame is: IMG_MAGIC + 4-byte big-endian length + JPEG payload.
+# Keep in sync with maix/camera.py.
+IMG_MAGIC = b"\xab\xcd\xef\x01"
+
+# Local mode tracking so the listener threads know how to parse the stream.
+MODE_DETECT = CMD_DETECT
+MODE_DEBUG = CMD_DEBUG
+MODE_TRAINING = CMD_TRAINING
+MODE_STOPPED = CMD_STOP
+
+DEFAULT_CAMERA_PORTS = (
+    "/dev/ttyAMA0",
+    "/dev/ttyAMA1",
+    "/dev/ttyAMA2",
+    "/dev/ttyAMA3",
+)
+
 
 class Cameras():
-    def __init__(self, ports=[
-        "/dev/ttyAMA0",
-        "/dev/ttyAMA1",
-        "/dev/ttyAMA2",
-        "/dev/ttyAMA3"
-        ], naive=False):
+    def __init__(self, ports=None, naive=False):
         """
         Ports should be defined where cameras NESW correspond to indexes 0123
 
@@ -16,6 +44,7 @@ class Cameras():
         """
 
         self.prev_ball_dir = 0
+        ports = list(DEFAULT_CAMERA_PORTS if ports is None else ports)
 
         self._threads = []
         self._naive = naive
@@ -32,11 +61,93 @@ class Cameras():
         self._lock = threading.Lock()
         self._data = [None] * len(ports)
 
+        # JPEG frames received per camera while in DEBUG/TRAINING mode.
+        self._frames = [None] * len(ports)
+        # Open serial handles, so we can also write commands back to the cameras.
+        self._serials = [None] * len(ports)
+        # Desired streaming mode per camera. Cameras start idle and only stream
+        # after the pi explicitly asks for a mode.
+        self._modes = [MODE_STOPPED] * len(ports)
+        self._mode_payloads = [b""] * len(ports)
+        # Where TRAINING mode saves JPEGs received from each camera.
+        self._training_dir = Path("training_images")
+        self._deinited = False
+
         for i, port in enumerate(ports):
             # i: N = 0, E = 1, S = 2, W = 3
             thread = threading.Thread(target=self._listen_port, args=(port, i), daemon=True)
             thread.start()
             self._threads.append(thread)
+
+        atexit.register(self.deinit)
+
+    # ----- Commands to the cameras ----- #
+
+    def send_command(self, command, cam_index=None, payload=b""):
+        """Send a control command to one camera (cam_index) or all of them."""
+        frame = bytes([CMD_FRAME_MARKER, command]) + payload
+        targets = range(len(self._serials)) if cam_index is None else [cam_index]
+        for i in targets:
+            self._modes[i] = command
+            self._mode_payloads[i] = payload
+            port = self._serials[i]
+            if port is not None and port.is_open:
+                port.write(frame)
+
+    def start_streaming(self, cam_index=None):
+        """Tell the camera(s) to stream detection packets."""
+        self.send_command(CMD_DETECT, cam_index)
+
+    def stop_streaming(self, cam_index=None):
+        """Tell the camera(s) to stop streaming and go idle."""
+        self.send_command(CMD_STOP, cam_index)
+
+    def start_debug_stream(self, cam_index=None, quality=60):
+        """Tell the camera(s) to broadcast JPEG frames for web streaming/debugging."""
+        quality = min(max(int(quality), 1), 100)
+        self.send_command(CMD_DEBUG, cam_index, bytes([quality]))
+
+    def start_raw_stream(self, cam_index=None, quality=60):
+        """Backward-compatible alias for start_debug_stream()."""
+        self.start_debug_stream(cam_index, quality)
+
+    def start_training_capture(self, save_dir="training_images", cam_index=None):
+        """Tell the camera(s) to broadcast and save full-quality training frames."""
+        self._training_dir = Path(save_dir)
+        self._training_dir.mkdir(parents=True, exist_ok=True)
+        self.send_command(CMD_TRAINING, cam_index)
+
+    def deinit(self):
+        """Stop all camera streams and close serial ports."""
+        if getattr(self, "_deinited", True):
+            return
+        self._deinited = True
+
+        self.stop_streaming()
+        self.running = False
+
+        for port in self._serials:
+            if port is None:
+                continue
+            try:
+                if port.is_open:
+                    port.flush()
+                    port.close()
+            except serial.SerialException:
+                pass
+
+    def __del__(self):
+        self.deinit()
+
+    def get_frame(self, cam_index=0):
+        """Return the most recent JPEG frame (bytes) from a camera, or None."""
+        with self._lock:
+            return self._frames[cam_index]
+
+    @property
+    def camera_count(self):
+        """Number of configured camera ports."""
+        return len(self._serials)
 
     def get_ball_dir(self):
         return self.ball_dir
@@ -64,23 +175,53 @@ class Cameras():
 
     def _listen_port(self, port_name:str, cam_index:int):
         print(f"Opening port {port_name}")
-        port = serial.Serial(port_name, baudrate=115200)
+        port = serial.Serial(port_name, baudrate=115200, timeout=0.1)
+        self._serials[cam_index] = port
 
         while not port.is_open:
             continue
+        self.send_command(self._modes[cam_index], cam_index, self._mode_payloads[cam_index])
         if self._naive:
             while self.running:
                 res = port.read(1)
+                if not res:
+                    continue
                 with self._lock:
                     self._data[cam_index] = res[0]
             return
 
-        while port.read(1)[0] != 0xff:
-            continue
-
         body = bytearray()
+        synced = False
         while self.running:
-            byte = port.read(1)[0]
+            mode = self._modes[cam_index]
+            if mode == MODE_STOPPED:
+                synced = False
+                body.clear()
+                time.sleep(0.01)
+                continue
+
+            # In DEBUG/TRAINING mode the camera sends framed JPEG images instead of
+            # the 0xff-delimited detection packets.
+            if mode == MODE_DEBUG or mode == MODE_TRAINING:
+                synced = False
+                body.clear()
+                frame = self._read_image_frame(port, cam_index)
+                if frame is not None:
+                    with self._lock:
+                        self._frames[cam_index] = frame
+                    if self._modes[cam_index] == MODE_TRAINING:
+                        self._save_training_frame(cam_index, frame)
+                continue
+
+            data = port.read(1)
+            if not data:
+                continue
+            byte = data[0]
+            if not synced:
+                # Re-sync to a packet boundary (also used after leaving image modes).
+                if byte == 0xff:
+                    synced = True
+                continue
             if byte == 0xff:
                 if len(body) > 0:
                     # print(bytes(body))
@@ -89,6 +230,49 @@ class Cameras():
                     body.clear()
                 continue
             body.append(byte)
+
+    def _read_image_frame(self, port, cam_index):
+        """Read one IMG_MAGIC-framed JPEG payload from the port.
+
+        Returns the JPEG bytes, or None if the mode changed / framing broke.
+        """
+        matched = 0
+        while self.running and (self._modes[cam_index] == MODE_DEBUG or self._modes[cam_index] == MODE_TRAINING):
+            data = port.read(1)
+            if not data:
+                return None
+            byte = data[0]
+            if byte == IMG_MAGIC[matched]:
+                matched += 1
+                if matched == len(IMG_MAGIC):
+                    break
+            else:
+                # Restart matching, allowing this byte to begin a new magic.
+                matched = 1 if byte == IMG_MAGIC[0] else 0
+
+        if matched != len(IMG_MAGIC):
+            return None
+
+        length_bytes = port.read(4)
+        if len(length_bytes) < 4:
+            return None
+        length = int.from_bytes(length_bytes, "big")
+
+        data = bytearray()
+        while len(data) < length and self.running:
+            chunk = port.read(length - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+
+        if len(data) != length:
+            return None
+        return bytes(data)
+
+    def _save_training_frame(self, cam_index, frame):
+        filename = self._training_dir / f"cam{cam_index}_{time.time_ns()}.jpg"
+        with open(filename, "wb") as f:
+            f.write(frame)
 
     @staticmethod
     def _process_block(block):

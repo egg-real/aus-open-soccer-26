@@ -1,7 +1,7 @@
 from maix import camera as maix_camera, display, image, nn, app, time
 from math import pi, atan2, hypot, cos, sin
 import numpy as np
-from camera import UART
+from camera import UART, CMD_STOP, CMD_DETECT, CMD_DEBUG, CMD_TRAINING
 
 model_path = "model.mud"
 detector = nn.YOLOv5(model=model_path)
@@ -33,6 +33,25 @@ def to_cm(dist):
 
 DO_DISP = False
 
+# Quality (0-100) for frames streamed in DEBUG mode. Lower keeps the JPEG
+# small enough to push over the 115200 baud UART at a usable frame rate.
+DEBUG_JPEG_QUALITY = 60
+TRAINING_JPEG_QUALITY = 100
+
+# Operating modes, switched by commands from the pi (see camera.UART).
+MODE_STOPPED = 0   # idle, send nothing
+MODE_DETECT = 1    # stream detection packets (existing behaviour)
+MODE_DEBUG = 2     # broadcast compressed JPEG frames for web streaming/debugging
+MODE_TRAINING = 3  # broadcast full-quality JPEG frames for training capture
+
+# Map an incoming command byte to the mode it selects.
+_COMMAND_MODES = {
+    CMD_STOP: MODE_STOPPED,
+    CMD_DETECT: MODE_DETECT,
+    CMD_DEBUG: MODE_DEBUG,
+    CMD_TRAINING: MODE_TRAINING,
+}
+
 cam = maix_camera.Camera(IMG_WIDTH, IMG_HEIGHT, detector.input_format())
 uart = UART()
 if DO_DISP:
@@ -40,13 +59,41 @@ if DO_DISP:
 else:
     dis = None
 
+mode = MODE_STOPPED
+debug_jpeg_quality = DEBUG_JPEG_QUALITY
+
 while not app.need_exit():
-    # msg = p.get_msg()
+    # Check whether the pi has asked us to start/stop or switch modes.
+    command = uart.read_command()
+    if command is not None:
+        command_byte, value = command
+        if command_byte in _COMMAND_MODES:
+            mode = _COMMAND_MODES[command_byte]
+            if command_byte == CMD_DEBUG and value is not None:
+                debug_jpeg_quality = min(max(value, 1), 100)
+
+    # Idle: don't touch the camera, just keep listening for commands.
+    if mode == MODE_STOPPED:
+        time.sleep_ms(10)
+        continue
 
     try:
         img = cam.read()
     except RuntimeError:
-        uart.send_packet(cam_ok=False)
+        if mode == MODE_DETECT:
+            uart.send_packet(cam_ok=False)
+        continue
+
+    # Debug/training modes: ship the same frame the model would see as JPEG and
+    # skip detection entirely so the UART can send images as fast as possible.
+    if mode == MODE_DEBUG or mode == MODE_TRAINING:
+        quality = TRAINING_JPEG_QUALITY if mode == MODE_TRAINING else debug_jpeg_quality
+        jpg = img.to_jpeg(quality)
+        uart.send_image(jpg.to_bytes())
+        del jpg
+        if DO_DISP:
+            print(time.fps())
+            dis.show(img)
         continue
 
     objs = detector.detect(img, conf_th = 0.5, iou_th = 0.45)

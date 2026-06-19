@@ -1,20 +1,30 @@
-# SPDX-FileCopyrightText: 2018 Kattni Rembor for Adafruit Industries
-#
-# SPDX-License-Identifier: MIT
-
-"""CircuitPython Essentials UART Serial example"""
-import board
-import busio
-import digitalio
 import serial
 
-uart = serial.Serial("/dev/ttyAMA0", baudrate=115200, timeout=3000)
-while True:
-    data = uart.read(1)  # read up to 32 bytes
-    #print(data)  # this is a bytearray type
-    bitstring = ''.join(f"{byte:08b}" for byte in data)
-    print(bitstring)
-#    if data is not None:
-        # convert bytearray to string
-#       data_string = ''.join([chr(b) for b in data])
-        #print(data_string, end="")
+from camera import CMD_DETECT, CMD_FRAME_MARKER, CMD_STOP
+
+
+PORT = "/dev/ttyAMA0"
+BAUDRATE = 115200
+
+
+def send_command(uart, command):
+    uart.write(bytes([CMD_FRAME_MARKER, command]))
+
+
+def main():
+    with serial.Serial(PORT, baudrate=BAUDRATE, timeout=0.2) as uart:
+        send_command(uart, CMD_DETECT)
+        print(f"Reading detection bytes from {PORT}. Press Ctrl-C to stop.")
+
+        try:
+            while True:
+                data = uart.read(1)
+                if not data:
+                    continue
+                print(f"{data[0]:08b}")
+        finally:
+            send_command(uart, CMD_STOP)
+
+
+if __name__ == "__main__":
+    main()

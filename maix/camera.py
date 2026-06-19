@@ -2,6 +2,22 @@ from maix import camera as _camera, uart as _uart, pinmap as _pinmap, image as _
 from math import sin, cos, pi, copysign
 
 
+# ---- Pi -> Maix control protocol ----
+# The pi sends a 2-byte command frame: [CMD_FRAME_MARKER, command].
+# Keep these values in sync with pi/camera.py.
+CMD_FRAME_MARKER = 0xAA
+CMD_STOP = 0x00     # stop streaming, go idle
+CMD_DETECT = 0x01   # stream detection packets (the existing behaviour)
+CMD_DEBUG = 0x02    # broadcast JPEG frames for web streaming/debugging
+CMD_TRAINING = 0x03 # broadcast full-quality JPEG frames for training capture
+
+# ---- Maix -> Pi image framing ----
+# An image frame is: IMG_MAGIC + 4-byte big-endian length + JPEG payload.
+# This magic is chosen so it doesn't clash with the 0xff-delimited
+# detection packets. Keep in sync with pi/camera.py.
+IMG_MAGIC = b"\xab\xcd\xef\x01"
+
+
 class Camera():
     def __init__(self, w:int, h:int, debug=False, show=False):
         self.cam = _camera.Camera(w, h)
@@ -48,6 +64,9 @@ class UART():
 
         self.uart = _uart.UART(port, 115200)
 
+        # Holds bytes received from the pi that don't yet form a full command.
+        self._cmd_buf = bytearray()
+
         print("\n\n!!!PORT!!!: " + self.uart.get_port() + "\n\n")
     
     def _write(self, msg):
@@ -57,6 +76,46 @@ class UART():
         self.uart.write(msg)    
         _time.sleep_ms(5)
         
+        return True
+
+    def read_command(self):
+        """Poll the UART for a control command sent by the pi.
+
+        Non-blocking: reads whatever is in the receive buffer, parses any
+        ``[CMD_FRAME_MARKER, command]`` frames it finds, and returns the most
+        recent command byte. Returns ``None`` if no complete command arrived.
+        """
+        if not self.uart.is_open():
+            return None
+
+        data = self.uart.read()  # read(-1, 0): return immediately with buffer
+        if data:
+            self._cmd_buf.extend(data)
+
+        command = None
+        while True:
+            marker = self._cmd_buf.find(CMD_FRAME_MARKER)
+            if marker == -1:
+                # No marker at all, nothing worth keeping.
+                self._cmd_buf.clear()
+                break
+            if marker + 1 >= len(self._cmd_buf):
+                # Marker is the last byte; keep it and wait for the command byte.
+                del self._cmd_buf[:marker]
+                break
+            command = self._cmd_buf[marker + 1]
+            del self._cmd_buf[:marker + 2]
+
+        return command
+
+    def send_image(self, jpeg_bytes):
+        """Send a single JPEG frame to the pi."""
+        if not self.uart.is_open():
+            return False
+
+        header = IMG_MAGIC + len(jpeg_bytes).to_bytes(4, "big")
+        self.uart.write(header)
+        self.uart.write(jpeg_bytes)
         return True
     
     @staticmethod
