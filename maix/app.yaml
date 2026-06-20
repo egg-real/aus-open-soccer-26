@@ -3,9 +3,10 @@ files:
   - main.py
   - model.cvimodel
   - model.mud
+  - screen-2-world-polar.npy
 id: rcj_uart_ai
 name: RCJ Ball Detect
-version: 2.1.0
+version: 2.1.2
 author: brendan-liang
 icon: ''
 desc: RCJ ball, goal and wall detection with UART, made with MaixHub AI.

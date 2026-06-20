@@ -5,6 +5,7 @@ from camera import UART, CMD_STOP, CMD_DETECT, CMD_DEBUG, CMD_TRAINING
 
 model_path = "model.mud"
 detector = nn.YOLOv5(model=model_path)
+screenToWorldPolar = np.load("screen-2-world-polar.npy")
 
 IMG_WIDTH = 640
 IMG_HEIGHT = 360
@@ -19,14 +20,7 @@ cameraZ, cameraY = 158, 37.227
 cameraAOD = pi/6
 div = 374.67 
 def getPolarPosition(xPixel, yPixel):
-    z = ((179.5 - yPixel) / div) * cos(cameraAOD) - sin(cameraAOD)
-    y = cos(cameraAOD) + ((179.5 - yPixel) / div) * sin(cameraAOD)
-    x = (xPixel-319.5) / div
-    pos = np.array([x,y,z])
-    pos /= np.linalg.norm(pos)
-    worldPos = (pos * cameraZ / -pos[2])[:2]
-    worldPos[1] += cameraY
-    return atan2(*worldPos) * (180/pi), hypot(*worldPos)
+    return screenToWorldPolar[xPixel][yPixel][0], screenToWorldPolar[xPixel][yPixel][1]
 
 def to_cm(dist):
     return int(round(dist / MM_PER_CM))
@@ -66,11 +60,8 @@ while not app.need_exit():
     # Check whether the pi has asked us to start/stop or switch modes.
     command = uart.read_command()
     if command is not None:
-        command_byte, value = command
-        if command_byte in _COMMAND_MODES:
-            mode = _COMMAND_MODES[command_byte]
-            if command_byte == CMD_DEBUG and value is not None:
-                debug_jpeg_quality = min(max(value, 1), 100)
+        if command in _COMMAND_MODES:
+            mode = _COMMAND_MODES[command]
 
     # Idle: don't touch the camera, just keep listening for commands.
     if mode == MODE_STOPPED:
@@ -132,4 +123,3 @@ while not app.need_exit():
     if DO_DISP:
         print(time.fps())
         dis.show(img)
-
