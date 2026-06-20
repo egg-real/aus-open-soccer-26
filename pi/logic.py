@@ -6,6 +6,7 @@ import json
 from lib.dribbler import Dribbler
 from lib.drive import Drive
 from camera import Cameras
+from lib.break_beam import BreakBeam
 
 # ----- Main Thing ----- #
 class bot_states(Enum):
@@ -65,6 +66,7 @@ class AttackBot():
         self.drive = Drive()  # Motor controller
         self.cameras = Cameras(["/dev/ttyAMA0"])  # Vision system
         self.dribbler = Dribbler()
+        self.break_beam = BreakBeam("/dev/ttyAMA0")
 
         # Variables
         ## Time
@@ -124,6 +126,9 @@ class AttackBot():
         # Update sensor states
         self.see_ball = self.ball_dir is not None and self.ball_dist is not None
         self.see_goal = self.goal_dir is not None
+        if self.break_beam.read():
+            self.see_ball = True
+            self.have_ball = True
         
         # Update ball tracking
         if self.see_ball:
