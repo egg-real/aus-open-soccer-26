@@ -30,7 +30,7 @@ class AttackBot():
     def on_startup(self):
         """Initialise"""
         # Load motor config
-        with open("config.json") as f:
+        with open("/home/dsa/Robotics/config.json") as f:
             config = json.load(f)
         
         # Constants
@@ -64,7 +64,8 @@ class AttackBot():
 
         # Initialize hardware interfaces
         self.drive = Drive()  # Motor controller
-        self.cameras = Cameras(["/dev/ttyAMA0"])  # Vision system
+        self.cameras = Cameras()  # Vision system
+        self.cameras.start_streaming()
         self.dribbler = Dribbler()
         self.break_beam = BreakBeam("/dev/ttyAMA0")
 
@@ -179,7 +180,8 @@ class AttackBot():
             self.target_yaw = 0
             # Chase and acpture ball
             self.move_spd = self.BASE_BALL_CHASE_SPD
-            self.ball_capture()
+            if self.see_ball:
+                self.ball_capture()
         
         elif self.state == bot_states.HAVE_BALL:
             self.execute_have_ball_behaviour()
@@ -279,9 +281,12 @@ class AttackBot():
 
     def print_state(self):
         """Print current state for debugging"""
+        ball_dir = f"{self.ball_dir:.1f}°" if self.ball_dir is not None else "None"
+        ball_dist = f"{self.ball_dist:.0f}mm" if self.ball_dist is not None else "None"
+        goal_dir = f"{self.goal_dir:.1f}°" if self.goal_dir is not None else "None"
         print(f"State: {self.state.name} | Possession: {self.possession_state.name} | "
-              f"Ball: {self.see_ball} (dir={self.ball_dir:.1f}°, dist={self.ball_dist:.0f}mm) | "
-              f"Goal: {self.see_goal} (dir={self.goal_dir:.1f}°)")
+              f"Ball: {self.see_ball} (dir={ball_dir}, dist={ball_dist}) | "
+              f"Goal: {self.see_goal} (dir={goal_dir})")
     
 
 
