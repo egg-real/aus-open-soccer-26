@@ -115,6 +115,9 @@ class Cameras():
         """Tell the camera(s) to broadcast and save full-quality training frames."""
         self._training_dir = Path(save_dir)
         self._training_dir.mkdir(parents=True, exist_ok=True)
+        targets = range(len(self._serials)) if cam_index is None else [cam_index]
+        for i in targets:
+            (self._training_dir / f"cam{i}").mkdir(parents=True, exist_ok=True)
         self.send_command(CMD_TRAINING, cam_index)
 
     def deinit(self):
@@ -270,7 +273,9 @@ class Cameras():
         return bytes(data)
 
     def _save_training_frame(self, cam_index, frame):
-        filename = self._training_dir / f"cam{cam_index}_{time.time_ns()}.jpg"
+        camera_dir = self._training_dir / f"cam{cam_index}"
+        camera_dir.mkdir(parents=True, exist_ok=True)
+        filename = camera_dir / f"cam{cam_index}_{time.time_ns()}.jpg"
         with open(filename, "wb") as f:
             f.write(frame)
 
