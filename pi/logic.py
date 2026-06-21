@@ -7,6 +7,7 @@ from lib.dribbler import Dribbler
 from lib.drive import Drive
 from camera import Cameras
 from lib.break_beam import BreakBeam
+import board
 
 # ----- Main Thing ----- #
 class bot_states(Enum):
@@ -67,7 +68,7 @@ class AttackBot():
         self.cameras = Cameras()  # Vision system
         self.cameras.start_streaming()
         self.dribbler = Dribbler()
-        self.break_beam = BreakBeam("/dev/ttyAMA0")
+        self.break_beam = BreakBeam(board.D17)
 
         # Variables
         ## Time
