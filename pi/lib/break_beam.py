@@ -8,4 +8,4 @@ class BreakBeam:
         self.break_beam.pull = digitalio.Pull.UP
 
     def read(self):
-        return self.break_beam.value
+        return not self.break_beam.value

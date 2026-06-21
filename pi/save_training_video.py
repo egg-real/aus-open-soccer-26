@@ -3,7 +3,7 @@
 
 The camera protocol sends individual JPEG images, not a video container. This
 script keeps every camera in training mode and writes each received frame into
-the output folder.
+per-camera folders inside the output folder.
 """
 
 import argparse
@@ -21,7 +21,7 @@ def parse_args():
         "-o",
         "--output",
         default="training_images",
-        help="folder to save JPEG frames into (default: %(default)s)",
+        help="folder to save per-camera JPEG frame folders into (default: %(default)s)",
     )
     parser.add_argument(
         "--ports",
@@ -51,7 +51,7 @@ def parse_args():
 
 
 def count_saved_frames(output_dir):
-    return sum(1 for _ in output_dir.glob("*.jpg"))
+    return sum(1 for path in output_dir.rglob("*.jpg") if path.is_file())
 
 
 def main():

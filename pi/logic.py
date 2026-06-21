@@ -312,7 +312,7 @@ class AttackBot():
         # If ball is in front, move towards it
         if -15 <= self.ball_dir <= 15:
             self.move_dir = self.ball_dir * 1.5
-            if self.ball_dist < 200:
+            if self.ball_dist < 200 or self.have_ball:
                 self.dribble()
 
         # Else if too close to ball, go away from it
