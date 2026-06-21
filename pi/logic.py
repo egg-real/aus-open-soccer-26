@@ -121,10 +121,7 @@ class AttackBot():
 
             self.own_goal_dir = self.cameras.get_blue_goal_dir()
             self.own_goal_dist = self.cameras.get_blue_goal_dist()
-            
-        # TODO: Add self.have_ball update
-        
-
+                    
         # Update sensor states
         self.see_ball = self.ball_dir is not None and self.ball_dist is not None
         self.see_goal = self.goal_dir is not None
@@ -233,7 +230,7 @@ class AttackBot():
         # If ball is in front, move towards it
         if -15 <= self.ball_dir <= 15:
             self.move_dir = self.ball_dir * 1.5
-            if self.ball_dist < 200:
+            if self.ball_dist < 200 or self.have_ball:
                 self.dribble()
 
         # Else if too close to ball, go away from it
