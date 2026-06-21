@@ -9,6 +9,7 @@ from math import radians, sin
 SMOOTHING_TIME = 0.30
 YAW_CORRECT_THRESHOLD = 3.0
 YAW_CORRECT_SPEED = 0.1
+POSSESSION_YAW_CORRECT_SPEED = 0.05
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
@@ -42,6 +43,7 @@ class Drive:
         self.target_direction = 0
         self.target_speed = 0
         self.target_rotation = 0
+        self.target_yaw_correct_speed = YAW_CORRECT_SPEED
         self.target_lock = threading.Lock()
         self.last_update_time = time.monotonic()
         self.imu = IMU()
@@ -59,11 +61,15 @@ class Drive:
         self.drive_thread = threading.Thread(target=self._drive_loop, daemon=True)
         self.drive_thread.start()
 
-    def move(self, angle, speed=0.5, rotation=0): # rotation is the desired yaw value
+    def move(self, angle, speed=0.5, rotation=0, possession=False): # rotation is the desired yaw value
         with self.target_lock:
             self.target_direction = angle
             self.target_speed = speed
             self.target_rotation = wrap_angle(rotation)
+            if possession:
+                self.target_yaw_correct_speed = POSSESSION_YAW_CORRECT_SPEED
+            else:
+                self.target_yaw_correct_speed = YAW_CORRECT_SPEED
 
     def _drive_loop(self):
         motors_config = config.get_value("motors")
@@ -86,15 +92,16 @@ class Drive:
         self.yaw = wrap_angle(self.initial_yaw - raw_yaw)
         with self.target_lock:
             target_rotation = self.target_rotation
+            yaw_correct_speed = self.target_yaw_correct_speed
 
         yaw_error = wrap_angle(target_rotation - self.yaw)
         if abs(yaw_error) <= YAW_CORRECT_THRESHOLD:
             return 0
 
         return clamp(
-            (yaw_error / 60.0) * YAW_CORRECT_SPEED,
-            -YAW_CORRECT_SPEED,
-            YAW_CORRECT_SPEED,
+            (yaw_error / 60.0) * yaw_correct_speed,
+            -yaw_correct_speed,
+            yaw_correct_speed,
         )
 
     def _update_current_velocity(self):
