@@ -54,7 +54,7 @@ class AttackBot():
         self.READY_TO_SHOOT_ANGLE = 15  # degrees
         self.READY_TO_SHOOT_DISTANCE = 200  # mm from goal
 
-        self.DRIBBLER_ROT_SPD = 1.0
+        self.DRIBBLER_ROT_SPD = -1.0
         self.POSSESSION_ROT_SPD = 0.1
 
         ## Ball hiding TODO: Values & Thresholds to be tuned
@@ -316,7 +316,7 @@ class AttackBot():
                 self.dribble()
 
         # Else if too close to ball, go away from it
-        elif self.ball_dist < 170:
+        elif self.ball_dist < 50:
             distance_ratio = (self.BALL_ORBIT_RADIUS - self.ball_dist) / self.BALL_ORBIT_RADIUS
             orbit_angle = 90 + distance_ratio * 90
             self.move_dir = self.ball_dir + np.copysign(orbit_angle, self.ball_dir)
