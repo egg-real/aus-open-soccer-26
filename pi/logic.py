@@ -310,7 +310,7 @@ class AttackBot():
         # A lot of magic numbers here, I cbb making constants for all of them
 
         # If ball is in front, move towards it
-        if -15 <= self.ball_dir <= 15:
+        if self.have_ball or -15 <= self.ball_dir <= 15:
             self.move_dir = self.ball_dir * 1.5
             if self.ball_dist < 200 or self.have_ball:
                 self.dribble()
