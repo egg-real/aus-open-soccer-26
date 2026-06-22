@@ -109,6 +109,10 @@ class AttackBot():
         ## Goal
         self.goal_dir = 0
         self.own_goal_dir = 180
+
+        ## Line
+        self.line_dir = None
+        self.line_dist = None
     
 
     def on_update(self):
@@ -123,6 +127,8 @@ class AttackBot():
 
         self.ball_dir = self.cameras.get_ball_dir()
         self.ball_dist = self.cameras.get_ball_dist()
+        self.line_dir = self.cameras.get_line_dir()
+        self.line_dist = self.cameras.get_line_dist()
 
         if self.target_goal == GoalColour.BLUE:
             self.goal_dir = self.cameras.get_blue_goal_dir()
@@ -187,7 +193,7 @@ class AttackBot():
     def execute_behaviour(self):
         """Execute the current state's behaviour"""
         if self.state == BotStates.NO_SEE_BALL:
-            self.target_yaw = self.wrap_angle(self.target_yaw + 1)
+            # self.target_yaw = self.wrap_angle(self.target_yaw + 1)
             # Search for ball or go defend goal
             # TODO: Implement search pattern (rotate, move to center, etc.)
             self.move_dir = 0
@@ -272,11 +278,16 @@ class AttackBot():
                     self.target_yaw = goal_dir
                 return
 
-            wall_dir = np.sign(self.x_coord) * 90
-            self.target_yaw = wall_dir
+            line_dir = self.line_dir
+            if line_dir is None:
+                self.move_dir = 0
+                self.move_spd = 0
+                return
+
+            self.target_yaw = line_dir
 
             if abs(self.x_coord) < self.CRAB_WALK_X:
-                self.move_dir = wall_dir
+                self.move_dir = line_dir
                 self.move_spd = self.EDGE_BALL_HIDE_X_SPD
             else:
                 self.move_dir = 0

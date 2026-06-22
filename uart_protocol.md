@@ -27,14 +27,13 @@ Modes:
 | Data           | Data Type    | Size                         | Unit    | Description                                                                         |
 | -------------- | ------------ | ---------------------------- | ------- | ----------------------------------------------------------------------------------- |
 | start_flag     | byte         | 8 bits | 🇦🇺    | All 1s to signal start of a new packet. NOTE: no other byte can have all 1s.        |
-| info_bits      | booleans     | 4 bits of 0 + 4 info bits | bit     | Can see ball, Can see goal, Goal is yellow, Camera is okay.                         |
+| info_bits      | booleans     | 3 bits of 0 + 5 info bits | bit     | Can see line, Can see ball, Can see goal, Goal is yellow, Camera is okay.            |
 | ball_direction | signed int   | 8 bits                       | degrees | Signed angle from the centre (1 bit sign, 7 bits integer)                           |
 | ball_distance  | unsigned int | 8 bits                       | cm      | Rough distance to ball                                                              |
-| wall_direction | signed int   | 8 bits                       | degrees | Signed angle from the centre to the closest wall (1 bit sign, 7 bits integer)       |
-| wall_distance  | unsigned int | 8 bits                       | cm      | Rough distance to the closest wall                                                  |
 | goal_direction | signed int   | 8 bits                       | degrees | Signed angle from the centre to the goal if applicable (1 bit sign, 7 bits integer) |
-| goal_distance  | unsigned int | 8 bits                       | cm      | Rough distance to the closest wall                                                  |
-| lines          | list         | unlimited, 16 bits each line | cm      | A list of equations of lines in the form y=mx+c, where the first 8 bits represent m and the next 8 represent c. If m is 254, the line is vertical and points up, so c is the x-axis value of the line. (0,0) is the bottom left corner where the white lines meet from the bot's perspective facing forward. Forward is postive y and right is positive x.
+| goal_distance  | unsigned int | 8 bits                       | cm      | Rough distance to the goal                                                          |
+| line_direction | signed int   | 8 bits                       | degrees | Signed angle from the centre to the closest point on the closest white line (1 bit sign, 7 bits integer). Only meaningful when the "Can see line" bit is set. |
+| line_distance  | unsigned int | 8 bits                       | cm      | Rough distance to the closest point on the closest white line.                      |
 
 ## Camera → Bot (image)
 

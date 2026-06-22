@@ -160,22 +160,28 @@ class UART():
         # 0xff is reserved as the packet start flag, so avoid it in data bytes.
         num = min(abs(int(num)), 126 if sign_bit else 127)
         return ((sign_bit) << 7) | num
+
+    @staticmethod
+    def _packunsigned(num):
+        # 0xff is reserved as the packet start flag, so avoid it in data bytes.
+        return min(max(int(num), 0), 254)
     
     def send_packet(self, see_ball:bool=False, ball_dir:int=0, ball_dist:int=0,
                     see_goal:bool=False, yellow_goal:bool=False, goal_dir:int=0, goal_dist:int=0,
-                    wall_dir:int=0, wall_dist:int=0,
+                    see_line:bool=False, line_dir:int=0, line_dist:int=0,
                     cam_ok:bool=True):
 
-        info_byte = 0x08 * see_ball + 0x04 * see_goal + 0x02 * yellow_goal + 0x01 * cam_ok
+        info_byte = (0x10 * see_line + 0x08 * see_ball + 0x04 * see_goal
+                     + 0x02 * yellow_goal + 0x01 * cam_ok)
 
         packet = ((0xff << 56)
-                    | (info_byte << 48) 
+                    | (info_byte << 48)
                     | (self._packsigned(ball_dir) << 40)
-                    | (min(ball_dist, 127) << 32)
-                    | (self._packsigned(wall_dir) << 24)
-                    | (min(wall_dist, 127) << 16)
-                    | (self._packsigned(goal_dir) << 8)
-                    | (min(goal_dist, 127))
+                    | (self._packunsigned(ball_dist) << 32)
+                    | (self._packsigned(goal_dir) << 24)
+                    | (self._packunsigned(goal_dist) << 16)
+                    | (self._packsigned(line_dir) << 8)
+                    | (self._packunsigned(line_dist))
                    )
 
         self._write(packet.to_bytes(8, "big"))
