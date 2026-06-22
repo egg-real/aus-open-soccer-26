@@ -20,6 +20,10 @@ CMD_TRAINING = 0x03 # broadcast full-quality JPEG frames for training capture
 # An image frame is: IMG_MAGIC + 4-byte big-endian length + JPEG payload.
 # Keep in sync with maix/camera.py.
 IMG_MAGIC = b"\xab\xcd\xef\x01"
+JPEG_SOI = b"\xff\xd8"
+JPEG_EOI = b"\xff\xd9"
+MAX_IMAGE_BYTES = 1_000_000
+UART_BAUDRATE = 115200
 
 # Local mode tracking so the listener threads know how to parse the stream.
 MODE_DETECT = CMD_DETECT
@@ -63,6 +67,15 @@ class Cameras():
 
         # JPEG frames received per camera while in DEBUG/TRAINING mode.
         self._frames = [None] * len(ports)
+        self._frame_status = [
+            {
+                "state": "idle",
+                "last_error": None,
+                "frames": 0,
+                "last_size": 0,
+            }
+            for _ in ports
+        ]
         # Open serial handles, so we can also write commands back to the cameras.
         self._serials = [None] * len(ports)
         # Desired streaming mode per camera. Cameras start idle and only stream
@@ -90,6 +103,15 @@ class Cameras():
         for i in targets:
             self._modes[i] = command
             self._mode_payloads[i] = payload
+            if command == MODE_DEBUG or command == MODE_TRAINING:
+                with self._lock:
+                    self._frames[i] = None
+                    self._frame_status[i] = {
+                        "state": "waiting for image frame",
+                        "last_error": None,
+                        "frames": 0,
+                        "last_size": 0,
+                    }
             port = self._serials[i]
             if port is not None and port.is_open:
                 port.write(frame)
@@ -147,6 +169,11 @@ class Cameras():
         with self._lock:
             return self._frames[cam_index]
 
+    def get_frame_status(self, cam_index=0):
+        """Return image-stream receive status for debugging."""
+        with self._lock:
+            return self._frame_status[cam_index].copy()
+
     @property
     def camera_count(self):
         """Number of configured camera ports."""
@@ -178,7 +205,7 @@ class Cameras():
 
     def _listen_port(self, port_name:str, cam_index:int):
         print(f"Opening port {port_name}")
-        port = serial.Serial(port_name, baudrate=115200, timeout=0.1)
+        port = serial.Serial(port_name, baudrate=UART_BAUDRATE, timeout=0.1)
         self._serials[cam_index] = port
 
         while not port.is_open:
@@ -212,6 +239,9 @@ class Cameras():
                 if frame is not None:
                     with self._lock:
                         self._frames[cam_index] = frame
+                        self._frame_status[cam_index]["state"] = "received JPEG frame"
+                        self._frame_status[cam_index]["frames"] += 1
+                        self._frame_status[cam_index]["last_size"] = len(frame)
                     if self._modes[cam_index] == MODE_TRAINING:
                         self._save_training_frame(cam_index, frame)
                 continue
@@ -243,6 +273,7 @@ class Cameras():
         while self.running and (self._modes[cam_index] == MODE_DEBUG or self._modes[cam_index] == MODE_TRAINING):
             data = port.read(1)
             if not data:
+                self._set_frame_state(cam_index, "waiting for image magic")
                 return None
             byte = data[0]
             if byte == IMG_MAGIC[matched]:
@@ -258,19 +289,73 @@ class Cameras():
 
         length_bytes = port.read(4)
         if len(length_bytes) < 4:
+            self._set_frame_error(
+                cam_index,
+                f"incomplete image length header: {len(length_bytes)}/4 byte(s)",
+            )
             return None
         length = int.from_bytes(length_bytes, "big")
+        if length <= 0 or length > MAX_IMAGE_BYTES:
+            self._set_frame_error(cam_index, f"invalid image length: {length} byte(s)")
+            return None
 
         data = bytearray()
+        payload_deadline = time.monotonic() + self._image_read_timeout(length)
         while len(data) < length and self.running:
-            chunk = port.read(length - len(data))
+            chunk = port.read(min(4096, length - len(data)))
             if not chunk:
-                break
+                if time.monotonic() >= payload_deadline:
+                    break
+                self._set_frame_state(
+                    cam_index,
+                    f"receiving image payload: {len(data)}/{length} byte(s)",
+                )
+                continue
             data.extend(chunk)
 
         if len(data) != length:
+            self._set_frame_error(
+                cam_index,
+                f"incomplete image payload: {len(data)}/{length} byte(s)",
+            )
             return None
-        return bytes(data)
+        frame = bytes(data)
+        frame = self._normalize_jpeg_frame(frame)
+        if frame is None:
+            self._set_frame_error(
+                cam_index,
+                (
+                    f"invalid JPEG payload: length={len(data)}, "
+                    f"start={bytes(data[:2]).hex()}, end={bytes(data[-2:]).hex()}"
+                ),
+            )
+            return None
+        return frame
+
+    @staticmethod
+    def _normalize_jpeg_frame(frame):
+        if not frame.startswith(JPEG_SOI):
+            return None
+        end = frame.find(JPEG_EOI)
+        if end < 0:
+            return None
+        return frame[:end + len(JPEG_EOI)]
+
+    @staticmethod
+    def _image_read_timeout(length):
+        # 8N1 UART sends roughly 10 line bits per byte; add margin for scheduling.
+        return max(1.0, (length * 10 / UART_BAUDRATE) + 1.0)
+
+    def _set_frame_state(self, cam_index, state):
+        with self._lock:
+            self._frame_status[cam_index]["state"] = state
+            if state.startswith("receiving image payload"):
+                self._frame_status[cam_index]["last_error"] = None
+
+    def _set_frame_error(self, cam_index, error):
+        with self._lock:
+            self._frame_status[cam_index]["state"] = "rejected image frame"
+            self._frame_status[cam_index]["last_error"] = error
 
     def _save_training_frame(self, cam_index, frame):
         camera_dir = self._training_dir / f"cam{cam_index}"

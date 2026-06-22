@@ -131,12 +131,19 @@ def make_handler(cams, stop_event):
 
             frame = cams.get_frame(cam_index)
             if frame is None:
+                status = cams.get_frame_status(cam_index)
+                message = (
+                    "No frame received from this camera yet.\n"
+                    f"State: {status['state']}\n"
+                )
+                if status["last_error"]:
+                    message += f"Last error: {status['last_error']}\n"
                 self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header("Retry-After", "1")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
-                self.wfile.write(b"No frame received from this camera yet.\n")
+                self.wfile.write(message.encode("utf-8"))
                 return
 
             self.send_response(HTTPStatus.OK)

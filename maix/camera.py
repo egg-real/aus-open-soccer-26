@@ -3,19 +3,24 @@ from math import sin, cos, pi, copysign
 
 
 # ---- Pi -> Maix control protocol ----
-# The pi sends a 2-byte command frame: [CMD_FRAME_MARKER, command].
+# The pi sends [CMD_FRAME_MARKER, command]. Debug adds a quality byte:
+# [CMD_FRAME_MARKER, CMD_DEBUG, quality].
 # Keep these values in sync with pi/camera.py.
 CMD_FRAME_MARKER = 0xAA
 CMD_STOP = 0x00     # stop streaming, go idle
 CMD_DETECT = 0x01   # stream detection packets (the existing behaviour)
 CMD_DEBUG = 0x02    # broadcast JPEG frames for web streaming/debugging
 CMD_TRAINING = 0x03 # broadcast full-quality JPEG frames for training capture
+UART_BAUDRATE = 115200
+UART_IMAGE_CHUNK_BYTES = 512
 
 # ---- Maix -> Pi image framing ----
 # An image frame is: IMG_MAGIC + 4-byte big-endian length + JPEG payload.
 # This magic is chosen so it doesn't clash with the 0xff-delimited
 # detection packets. Keep in sync with pi/camera.py.
 IMG_MAGIC = b"\xab\xcd\xef\x01"
+JPEG_SOI = b"\xff\xd8"
+JPEG_EOI = b"\xff\xd9"
 
 
 class Camera():
@@ -62,7 +67,7 @@ class UART():
         _pinmap.set_pin_function("P19", "UART3_TX")
         _pinmap.set_pin_function("P20", "UART3_RX")
 
-        self.uart = _uart.UART(port, 115200)
+        self.uart = _uart.UART(port, UART_BAUDRATE)
 
         # Holds bytes received from the pi that don't yet form a full command.
         self._cmd_buf = bytearray()
@@ -82,8 +87,9 @@ class UART():
         """Poll the UART for a control command sent by the pi.
 
         Non-blocking: reads whatever is in the receive buffer, parses any
-        ``[CMD_FRAME_MARKER, command]`` frames it finds, and returns the most
-        recent command byte. Returns ``None`` if no complete command arrived.
+        command frames it finds, and returns the most recent
+        ``(command, payload)`` tuple. Returns ``None`` if no complete command
+        arrived.
         """
         if not self.uart.is_open():
             return None
@@ -92,7 +98,7 @@ class UART():
         if data:
             self._cmd_buf.extend(data)
 
-        command = None
+        command_frame = None
         while True:
             marker = self._cmd_buf.find(CMD_FRAME_MARKER)
             if marker == -1:
@@ -104,19 +110,49 @@ class UART():
                 del self._cmd_buf[:marker]
                 break
             command = self._cmd_buf[marker + 1]
-            del self._cmd_buf[:marker + 2]
+            payload_len = 1 if command == CMD_DEBUG else 0
+            frame_len = 2 + payload_len
+            if marker + frame_len > len(self._cmd_buf):
+                # Keep the complete marker/command prefix until the payload arrives.
+                del self._cmd_buf[:marker]
+                break
+            payload_start = marker + 2
+            payload = bytes(self._cmd_buf[payload_start:payload_start + payload_len])
+            command_frame = (command, payload)
+            del self._cmd_buf[:marker + frame_len]
 
-        return command
+        return command_frame
 
     def send_image(self, jpeg_bytes):
         """Send a single JPEG frame to the pi."""
         if not self.uart.is_open():
             return False
 
+        jpeg_bytes = self._normalize_jpeg(jpeg_bytes)
+        if jpeg_bytes is None:
+            return False
+
         header = IMG_MAGIC + len(jpeg_bytes).to_bytes(4, "big")
-        self.uart.write(header)
-        self.uart.write(jpeg_bytes)
+        return self._write_image_bytes(header + jpeg_bytes)
+
+    def _write_image_bytes(self, data):
+        for start in range(0, len(data), UART_IMAGE_CHUNK_BYTES):
+            chunk = data[start:start + UART_IMAGE_CHUNK_BYTES]
+            self.uart.write(chunk)
+            # 8N1 UART uses about 10 line bits per byte. Pace each chunk so
+            # large JPEGs do not overflow small serial transmit buffers.
+            chunk_time_ms = ((len(chunk) * 10 * 1000) // UART_BAUDRATE) + 1
+            _time.sleep_ms(max(1, int(chunk_time_ms)))
         return True
+
+    @staticmethod
+    def _normalize_jpeg(jpeg_bytes):
+        if not jpeg_bytes.startswith(JPEG_SOI):
+            return None
+        end = jpeg_bytes.find(JPEG_EOI)
+        if end < 0:
+            return None
+        return jpeg_bytes[:end + len(JPEG_EOI)]
     
     @staticmethod
     def _packsigned(num):

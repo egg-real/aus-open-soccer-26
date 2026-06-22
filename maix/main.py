@@ -20,6 +20,8 @@ cameraZ, cameraY = 158, 37.227
 cameraAOD = pi/6
 div = 374.67 
 def getPolarPosition(xPixel, yPixel):
+    xPixel = max(0, min(IMG_WIDTH - 1, int(round(xPixel))))
+    yPixel = max(0, min(IMG_HEIGHT - 1, int(round(yPixel))))
     return screenToWorldPolar[xPixel][yPixel][0], screenToWorldPolar[xPixel][yPixel][1]
 
 def to_cm(dist):
@@ -58,10 +60,13 @@ debug_jpeg_quality = DEBUG_JPEG_QUALITY
 
 while not app.need_exit():
     # Check whether the pi has asked us to start/stop or switch modes.
-    command = uart.read_command()
-    if command is not None:
+    command_frame = uart.read_command()
+    if command_frame is not None:
+        command, payload = command_frame
         if command in _COMMAND_MODES:
             mode = _COMMAND_MODES[command]
+            if command == CMD_DEBUG and payload:
+                debug_jpeg_quality = max(1, min(100, payload[0]))
 
     # Idle: don't touch the camera, just keep listening for commands.
     if mode == MODE_STOPPED:
