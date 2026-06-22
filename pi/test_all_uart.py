@@ -9,7 +9,7 @@ PORTS = list(DEFAULT_CAMERA_PORTS)
 BAUDRATE = 115200
 READ_TIMEOUT = 0.2
 CHECK_SECONDS = 5
-MIN_BLOCK_LENGTH = 7
+BLOCK_LENGTH = 7
 FRAME_MARKER = 0xFF
 
 
@@ -43,6 +43,8 @@ def read_camera_block(port):
             continue
 
         body.append(byte)
+        if len(body) == BLOCK_LENGTH:
+            return bytes(body)
 
 
 def check_port(port_name):
@@ -57,7 +59,7 @@ def check_port(port_name):
                     if block is None:
                         continue
 
-                    if len(block) < MIN_BLOCK_LENGTH:
+                    if len(block) != BLOCK_LENGTH:
                         continue
 
                     cam_ok = block[0] & 0x01 > 0
