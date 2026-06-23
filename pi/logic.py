@@ -45,10 +45,10 @@ class AttackBot():
         
         # Constants
         ## General
-        self.BASE_BALL_CHASE_SPD = 0.3
+        self.BASE_BALL_CHASE_SPD = 0.5
         self.HEAD_TO_GOAL_SPD = 0.4
         self.HEAD_TO_OWN_GOAL_SPD = 0.2
-        self.BALL_ORBIT_RADIUS = 300  # (mm if pixel-to-mm conversion is accurate, if not might be an arbitrary number)
+        self.BALL_ORBIT_RADIUS = 120  # (mm if pixel-to-mm conversion is accurate, if not might be an arbitrary number)
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
 
         self.READY_TO_SHOOT_ANGLE = 15  # degrees
@@ -152,6 +152,8 @@ class AttackBot():
         self.have_ball = self.break_beam.read()
         self.see_ball = self.have_ball or (self.ball_dir is not None and self.ball_dist is not None)
         self.see_goal = self.goal_dir is not None
+
+        # TODO: Update self.x_coord and self.y_coord
 
         if self.see_ball:
             self.last_ball_see_time = time.monotonic()
