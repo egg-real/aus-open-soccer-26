@@ -228,7 +228,8 @@ while not app.need_exit():
             msg = f'{label}: {obj.score:.2f}'
             img.draw_string(obj.x, obj.y, msg, color = image.COLOR_RED)
 
-    line = find_closest_line(img)  # (angle_deg, distance_mm) or None
+    # line = find_closest_line(img)  # (angle_deg, distance_mm) or None
+    line = None
 
     uart.send_packet(
         see_ball=ball is not None,
@@ -243,7 +244,6 @@ while not app.need_exit():
         line_dist=to_cm(line[1]) if line else 0,
         cam_ok=True,
     )
-
     if DO_DISP:
         print(time.fps())
         dis.show(img)
