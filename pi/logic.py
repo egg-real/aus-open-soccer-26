@@ -38,26 +38,25 @@ class AttackBot():
         with open("/home/dsa/Robotics/config.json") as f:
             config = json.load(f)
 
-
         # ----- TARGET GOAL ----- #
         self.target_goal = GoalColour.BLUE
-        self.TARGET_GOAL_Y = 100  # TODO: Threshold to be tuned
+        self.TARGET_GOAL_Y = 110  # TODO: Threshold to be tuned
         
         # Constants
         ## General
         self.BASE_BALL_CHASE_SPD = 0.5
         self.HEAD_TO_GOAL_SPD = 0.4
         self.HEAD_TO_OWN_GOAL_SPD = 0.2
-        self.BALL_ORBIT_RADIUS = 120  # (mm if pixel-to-mm conversion is accurate, if not might be an arbitrary number)
+        self.BALL_ORBIT_RADIUS = 12  # might be an arbitrary number
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
 
         self.READY_TO_SHOOT_ANGLE = 15  # degrees
-        self.READY_TO_SHOOT_DISTANCE = 200  # mm from goal
+        self.READY_TO_SHOOT_DISTANCE = 20
 
         self.DRIBBLER_ROT_SPD = -1.0
         self.POSSESSION_ROT_SPD = 0.1
 
-        ## Ball hiding TODO: Values & Thresholds to be tuned
+        ## Ball Hiding TODO: Values & Thresholds to be tuned
         self.EDGE_BALL_HIDE_X_SPD = 0.3
         self.EDGE_BALL_HIDE_Y_SPD = 0.1
         self.EDGE_BALL_HIDE_MIN_X = 40 # When gained possession of the ball, if x_coord is > this number, start edge hiding. 
@@ -77,7 +76,7 @@ class AttackBot():
         self.see_goal = False
         self.see_own_goal = False
 
-        # Initialize hardware interfaces
+        # Initialize Hardware Interfaces
         self.drive = Drive()
         self.cameras = Cameras()
         self.cameras.start_streaming()
@@ -101,7 +100,7 @@ class AttackBot():
 
         ## Ball
         self.ball_dir = 0
-        self.ball_dist = 500
+        self.ball_dist = 100
         self.last_ball_dir = 0
         self.last_ball_pos = (0, 0)
         self.last_ball_see_time = time.monotonic()
@@ -113,6 +112,10 @@ class AttackBot():
         ## Line
         self.line_dir = None
         self.line_dist = None
+
+        ## Bot Communication
+        self.other_bot_have_ball = False
+        self.other_bot_see_ball = False
     
 
     def on_update(self):
@@ -325,11 +328,11 @@ class AttackBot():
         # If ball is in front, move towards it
         if self.have_ball or -15 <= self.ball_dir <= 15:
             self.move_dir = self.ball_dir * 1.5
-            if self.ball_dist < 200 or self.have_ball:
+            if self.ball_dist < 50 or self.have_ball:
                 self.dribble()
 
         # Else if too close to ball, go away from it
-        elif self.ball_dist < 50:
+        elif self.ball_dist < 30:
             distance_ratio = (self.BALL_ORBIT_RADIUS - self.ball_dist) / self.BALL_ORBIT_RADIUS
             orbit_angle = 90 + distance_ratio * 90
             self.move_dir = self.ball_dir + np.copysign(orbit_angle, self.ball_dir)
@@ -353,7 +356,6 @@ class AttackBot():
     def kick(self):
         print("KICK")
         # TODO: actually kick
-        pass
 
     # ------ Misc functions ------ #
 
