@@ -453,18 +453,23 @@ class Cameras():
                     self.line_dist = line_dist
                     line_spotted = True
             if see_ball:
-                self.ball_dir = ball_dir + i * 90
-                self.ball_dist = ball_dist
-                ball_spotted = True
+                # If multiple cameras see the ball, trust the closest reading.
+                if not ball_spotted or ball_dist < self.ball_dist:
+                    self.ball_dir = ball_dir + i * 90
+                    self.ball_dist = ball_dist
+                    ball_spotted = True
             if see_goal:
+                robot_goal_dir = goal_dir + i * 90
                 if see_yellow:
-                    yellow_goal_spotted = True
-                    self.yellow_goal_dir = goal_dir + i * 90
-                    self.yellow_goal_dist = goal_dist
+                    if not yellow_goal_spotted or abs(robot_goal_dir) < abs(self.yellow_goal_dir):
+                        yellow_goal_spotted = True
+                        self.yellow_goal_dir = robot_goal_dir
+                        self.yellow_goal_dist = goal_dist
                 else:
-                    blue_goal_spotted = True
-                    self.blue_goal_dir = goal_dir + i * 90
-                    self.blue_goal_dist = goal_dist
+                    if not blue_goal_spotted or abs(robot_goal_dir) < abs(self.blue_goal_dir):
+                        blue_goal_spotted = True
+                        self.blue_goal_dir = robot_goal_dir
+                        self.blue_goal_dist = goal_dist
 
         if not ball_spotted:
             self.ball_dir = None

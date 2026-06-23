@@ -1,7 +1,7 @@
 
 [basic]
 type = cvimodel
-model = model.cvimodel
+model = model_286162.cvimodel
 
 [extra]
 model_type = yolov5
