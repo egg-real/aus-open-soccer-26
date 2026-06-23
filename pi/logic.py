@@ -49,6 +49,7 @@ class AttackBot():
         self.HEAD_TO_OWN_GOAL_SPD = 0.2
         self.BALL_ORBIT_RADIUS = 12  # might be an arbitrary number
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
+        self.DRIBBLE_DISTANCE_THRESHOLD = 50 # cm
 
         self.READY_TO_SHOOT_ANGLE = 15  # degrees
         self.READY_TO_SHOOT_DISTANCE = 20
@@ -82,6 +83,17 @@ class AttackBot():
         self.cameras.start_streaming()
         self.dribbler = Dribbler()
         self.break_beam = BreakBeam(board.D17)
+
+        while self.cameras.get_blue_goal_dir() is None or self.cameras.get_yellow_goal_dir() is None:
+            time.sleep(0.1)
+
+        blue_goal_dir = self.cameras.get_blue_goal_dir()
+        yellow_goal_dir = self.cameras.get_yellow_goal_dir()
+        
+        if (blue_goal_dir > 135 and blue_goal_dir < 225) or (yellow_goal_dir > 315 and yellow_goal_dir < 45):
+            self.target_goal = GoalColour.YELLOW
+        elif (yellow_goal_dir > 135 and yellow_goal_dir < 225) or (blue_goal_dir > 315 and blue_goal_dir < 45):
+            self.target_goal = GoalColour.BLUE
 
         # Variables
         ## Time
@@ -183,10 +195,11 @@ class AttackBot():
                 self.state = BotStates.HAVE_BALL
         
         elif self.state == BotStates.CHASING_BALL:
-            if (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:  # Lost sight of ball for some time
-                self.state = BotStates.NO_SEE_BALL   
-            elif self.have_ball:  # Captured ball
+            if self.have_ball:  # Captured ball
                 self.state = BotStates.HAVE_BALL
+            elif (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:  # Lost sight of ball for some time
+                self.state = BotStates.NO_SEE_BALL   
+            
         
         elif self.state == BotStates.HAVE_BALL:
             self.update_possession_state()
@@ -203,6 +216,7 @@ class AttackBot():
             # TODO: Implement search pattern (rotate, move to center, etc.)
             self.move_dir = 0
             self.move_spd = 0
+            self.dribble() # Just in case
         
         elif self.state == BotStates.CHASING_BALL:
             self.target_yaw = 0
@@ -215,7 +229,8 @@ class AttackBot():
             self.execute_have_ball_behaviour()
 
         elif self.state == BotStates.NONE:
-            pass
+            self.drive.stop()
+            self.stop_dribbler()
 
     
     # Possession logic
@@ -306,8 +321,9 @@ class AttackBot():
         elif self.possession_state == PossessionStates.READY_TO_SHOOT:
             self.move_dir = 0
             self.move_spd = 0
-            self.dribbler.set_speed(0)
+            self.stop_dribbler()
             self.kick()
+            time.sleep(0.1)
 
 
     def is_ready_to_shoot(self):
@@ -325,11 +341,14 @@ class AttackBot():
         """Ball capture algorithm from 2025"""
         # A lot of magic numbers here, I cbb making constants for all of them
 
+        if self.have_ball or self.ball_dist < self.DRIBBLE_DISTANCE_THRESHOLD:
+            self.dribble()
+        else:
+            self.stop_dribbler()
+
         # If ball is in front, move towards it
         if self.have_ball or -15 <= self.ball_dir <= 15:
             self.move_dir = self.ball_dir * 1.5
-            if self.ball_dist < 50 or self.have_ball:
-                self.dribble()
 
         # Else if too close to ball, go away from it
         elif self.ball_dist < 30:
@@ -352,6 +371,9 @@ class AttackBot():
 
     def dribble(self):
         self.dribbler.set_speed(self.DRIBBLER_ROT_SPD)
+
+    def stop_dribbler(self):
+        self.dribbler.set_speed(0)
 
     def kick(self):
         print("KICK")
@@ -386,8 +408,6 @@ class AttackBot():
               f"Ball: {self.see_ball} (dir={ball_dir}, dist={ball_dist}) | "
               f"Goal: {self.see_goal} (dir={goal_dir})")
     
-
-
 
 if __name__ == "__main__":
     bot1 = AttackBot()
