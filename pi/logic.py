@@ -339,7 +339,7 @@ class AttackBot():
             if self.BALL_ORBIT_RADIUS / self.ball_dist > 1:
                 print("arcsin argument is > 1. Adjust BALL_ORBIT_RADIUS")
             else:
-                self.move_dir = self.ball_dir + np.copysign(np.asin(self.BALL_ORBIT_RADIUS / self.ball_dist), self.ball_dir)
+                self.move_dir = self.ball_dir + np.copysign(math.degrees(np.asin(self.BALL_ORBIT_RADIUS / self.ball_dist)), self.ball_dir)
 
         
     # ------ Primitive actions ------ #
