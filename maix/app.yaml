@@ -6,7 +6,7 @@ files:
   - screen-2-world-polar.npy
 id: rcj_uart_ai
 name: RCJ Ball Detect
-version: 2.2.1
+version: 2.3.0
 author: brendan-liang
 icon: ''
 desc: RCJ ball, goal and line detection with UART, made with MaixHub AI.

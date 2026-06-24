@@ -8,7 +8,7 @@ from math import radians, sin
 
 SMOOTHING_TIME = 0.30
 YAW_CORRECT_THRESHOLD = 3.0
-YAW_CORRECT_SPEED = 0.1
+YAW_CORRECT_SPEED = 0.3
 POSSESSION_YAW_CORRECT_SPEED = 0.05
 
 def clamp(value, minimum, maximum):

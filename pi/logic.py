@@ -339,6 +339,7 @@ class AttackBot():
         self.move_spd = self.BASE_BALL_CHASE_SPD
         # Sorry, a lot of magic numbers here, I cbb making constants for all of them
         # https://yuta.techblog.jp/archives/40889399.html
+
         if self.see_ball:
             ball_dir = self.ball_dir
             ball_dist = self.ball_dist
@@ -349,19 +350,17 @@ class AttackBot():
 
         # If ball is in front, move towards it
         if self.have_ball or (-15 <= ball_dir <= 15 and abs(ball_pos_x) < self.CAPTURE_WIDTH):
- 
             # PD Calculations
             error_x = ball_pos_x
             derivative_x = (error_x - self.prev_ball_x_error) / self.dt if self.dt > 0 else 0
             self.prev_ball_x_error = error_x
-            
+
             move_vel_x = (error_x * self.CAPTURE_KP) + (derivative_x * self.CAPTURE_KD) # PD
-            
             move_vel_y = (math.sqrt(self.CAPTURE_WIDTH) - math.sqrt(abs(ball_pos_x))) / math.sqrt(self.CAPTURE_WIDTH) * self.BASE_BALL_CHASE_SPD # Moves forward fast the more centered it is
-            
+
             self.move_dir = math.degrees(math.atan2(move_vel_x, move_vel_y)) # Calculate direction of movement vector
             self.move_spd = math.sqrt(move_vel_x**2 + move_vel_y**2) # Calculate magnitude of movement vector
-                     
+
             if ball_dist < 50 or self.have_ball:
                 self.dribble()
 
