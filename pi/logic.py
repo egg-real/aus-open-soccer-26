@@ -9,6 +9,11 @@ from camera import Cameras
 from lib.break_beam import BreakBeam
 import board
 
+from kicker import Kicker
+
+SOLENOID_PIN = board.D27
+PULSE_S = 0.02
+
 # ----- Main Thing ----- #
 class BotStates(Enum):
     NONE = -1
@@ -47,12 +52,11 @@ class AttackBot():
         self.BASE_BALL_CHASE_SPD = 0.5
         self.HEAD_TO_GOAL_SPD = 0.4
         self.HEAD_TO_OWN_GOAL_SPD = 0.2
-        self.BALL_ORBIT_RADIUS = 12  # might be an arbitrary number
+        self.BALL_ORBIT_RADIUS = 15  # might be an arbitrary number
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
         self.DRIBBLE_DISTANCE_THRESHOLD = 50 # cm
 
-        self.READY_TO_SHOOT_ANGLE = 15  # degrees
-        self.READY_TO_SHOOT_DISTANCE = 20
+        self.READY_TO_SHOOT_ANGLE = 10  # degrees
 
         self.DRIBBLER_ROT_SPD = -1.0
         self.POSSESSION_ROT_SPD = 0.1
@@ -83,17 +87,18 @@ class AttackBot():
         self.cameras.start_streaming()
         self.dribbler = Dribbler()
         self.break_beam = BreakBeam(board.D17)
+        self.kicker = Kicker(SOLENOID_PIN, PULSE_S)
 
-        while self.cameras.get_blue_goal_dir() is None or self.cameras.get_yellow_goal_dir() is None:
-            time.sleep(0.1)
+        # while self.cameras.get_blue_goal_dir() is None or self.cameras.get_yellow_goal_dir() is None:
+        #     time.sleep(0.1)
 
-        blue_goal_dir = self.cameras.get_blue_goal_dir()
-        yellow_goal_dir = self.cameras.get_yellow_goal_dir()
+        # blue_goal_dir = self.cameras.get_blue_goal_dir()
+        # yellow_goal_dir = self.cameras.get_yellow_goal_dir()
         
-        if (blue_goal_dir > 135 and blue_goal_dir < 225) or (yellow_goal_dir > 315 and yellow_goal_dir < 45):
-            self.target_goal = GoalColour.YELLOW
-        elif (yellow_goal_dir > 135 and yellow_goal_dir < 225) or (blue_goal_dir > 315 and blue_goal_dir < 45):
-            self.target_goal = GoalColour.BLUE
+        # if (blue_goal_dir > 135 and blue_goal_dir < 225) or (yellow_goal_dir > 315 and yellow_goal_dir < 45):
+        #     self.target_goal = GoalColour.YELLOW
+        # elif (yellow_goal_dir > 135 and yellow_goal_dir < 225) or (blue_goal_dir > 315 and blue_goal_dir < 45):
+        #     self.target_goal = GoalColour.BLUE
 
         # Variables
         ## Time
@@ -165,12 +170,12 @@ class AttackBot():
             self.own_goal_dist = None
 
         self.have_ball = self.break_beam.read()
-        self.see_ball = self.have_ball or (self.ball_dir is not None and self.ball_dist is not None)
+        self.see_ball = self.ball_dir is not None and self.ball_dist is not None
         self.see_goal = self.goal_dir is not None
 
         # TODO: Update self.x_coord and self.y_coord
 
-        if self.see_ball:
+        if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
 
         # State machine
@@ -277,8 +282,9 @@ class AttackBot():
                 self.move_dir = self.goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
             else:
+                # TODO: Add actual find goal behaviour
                 self.move_dir = 0
-                self.move_spd = 0
+                self.move_spd = 0.1
 
         elif self.possession_state == PossessionStates.BALL_HIDING:
             if self.is_ready_to_shoot():
@@ -321,7 +327,6 @@ class AttackBot():
         elif self.possession_state == PossessionStates.READY_TO_SHOOT:
             self.move_dir = 0
             self.move_spd = 0
-            self.stop_dribbler()
             self.kick()
             time.sleep(0.1)
 
@@ -331,9 +336,7 @@ class AttackBot():
             self.have_ball
             and self.see_goal
             and self.goal_dir is not None
-            and self.ball_dist is not None
             and abs(self.goal_dir) < self.READY_TO_SHOOT_ANGLE
-            and self.ball_dist < self.READY_TO_SHOOT_DISTANCE
         )
         
 
@@ -376,8 +379,7 @@ class AttackBot():
         self.dribbler.set_speed(0)
 
     def kick(self):
-        print("KICK")
-        # TODO: actually kick
+        self.kicker.kick()
 
     # ------ Misc functions ------ #
 
