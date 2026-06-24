@@ -45,16 +45,15 @@ class AttackBot():
 
         # ----- TARGET GOAL ----- #
         self.target_goal = GoalColour.BLUE
-        self.TARGET_GOAL_Y = 110  # TODO: Threshold to be tuned
+        self.TARGET_GOAL_Y = 110  # TODO: Tune value
         
         # Constants
         ## General
-        self.BASE_BALL_CHASE_SPD = 0.5
-        self.HEAD_TO_GOAL_SPD = 0.4
-        self.HEAD_TO_OWN_GOAL_SPD = 0.2
-        self.BALL_ORBIT_RADIUS = 15  # might be an arbitrary number
-        self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
-        self.DRIBBLE_DISTANCE_THRESHOLD = 50 # cm
+        self.BASE_BALL_CHASE_SPD = 0.6
+        self.HEAD_TO_GOAL_SPD = 0.6
+        self.HEAD_TO_OWN_GOAL_SPD = 0.4
+        self.BALL_ORBIT_RADIUS = 14  # might be an arbitrary number
+        self.GIVE_UP_CHASING_BALL_TIME = 1.5 # seconds
 
         self.READY_TO_SHOOT_ANGLE = 10  # degrees
 
@@ -67,6 +66,15 @@ class AttackBot():
         self.EDGE_BALL_HIDE_MIN_X = 40 # When gained possession of the ball, if x_coord is > this number, start edge hiding. 
         self.CRAB_WALK_STOP_Y = 70 # When crab walking across the side, if y_coord is > this number, stop and turn towards the goal. 
         self.CRAB_WALK_X = 75 # When crab walking across the side, aim to be at this x coord 
+
+        # Ball capture PD control
+        self.CAPTURE_WIDTH = 4 # Max lateral distance to decide to move forward (close to cm)
+        self.CAPTURE_KP = 0.8
+        self.CAPTURE_KD = 0.1
+
+        self.prev_ball_x_error = 0.0 # Memory for the PD controller
+        
+        
 
 
         # Toggles
@@ -89,17 +97,6 @@ class AttackBot():
         self.break_beam = BreakBeam(board.D17)
         self.kicker = Kicker(SOLENOID_PIN, PULSE_S)
 
-        # while self.cameras.get_blue_goal_dir() is None or self.cameras.get_yellow_goal_dir() is None:
-        #     time.sleep(0.1)
-
-        # blue_goal_dir = self.cameras.get_blue_goal_dir()
-        # yellow_goal_dir = self.cameras.get_yellow_goal_dir()
-        
-        # if (blue_goal_dir > 135 and blue_goal_dir < 225) or (yellow_goal_dir > 315 and yellow_goal_dir < 45):
-        #     self.target_goal = GoalColour.YELLOW
-        # elif (yellow_goal_dir > 135 and yellow_goal_dir < 225) or (blue_goal_dir > 315 and blue_goal_dir < 45):
-        #     self.target_goal = GoalColour.BLUE
-
         # Variables
         ## Time
         self.last_time = time.monotonic()
@@ -119,8 +116,10 @@ class AttackBot():
         self.ball_dir = 0
         self.ball_dist = 100
         self.last_ball_dir = 0
-        self.last_ball_pos = (0, 0)
+        self.last_ball_dist = 0
         self.last_ball_see_time = time.monotonic()
+
+        self.last_ball_x_error = 0 # Memory for ball capture PD controller
 
         ## Goal
         self.goal_dir = 0
@@ -145,6 +144,11 @@ class AttackBot():
         # Update camera data
         self.cameras.process()
 
+        if self.ball_dir is not None and self.ball_dist is not None:
+            self.last_ball_dir = self.ball_dir
+            self.last_ball_dist = self.ball_dist
+            self.last_ball_see_time = time.monotonic()
+
         self.ball_dir = self.cameras.get_ball_dir()
         self.ball_dist = self.cameras.get_ball_dist()
         self.line_dir = self.cameras.get_line_dir()
@@ -162,7 +166,7 @@ class AttackBot():
             self.own_goal_dir = self.cameras.get_blue_goal_dir()
             self.own_goal_dist = self.cameras.get_blue_goal_dist()
 
-        else: # Just in case
+        else:
             print("Invalid target_goal:", self.target_goal)
             self.goal_dir = None
             self.goal_dist = None
@@ -173,11 +177,11 @@ class AttackBot():
         self.see_ball = self.ball_dir is not None and self.ball_dist is not None
         self.see_goal = self.goal_dir is not None
 
-        # TODO: Update self.x_coord and self.y_coord
+        # TODO: Update self.x_coord and self.y_coord if localisation works
 
         if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
-
+    
         # State machine
         self.update_main_state()
         self.execute_behaviour()
@@ -200,42 +204,38 @@ class AttackBot():
                 self.state = BotStates.HAVE_BALL
         
         elif self.state == BotStates.CHASING_BALL:
-            if self.have_ball:  # Captured ball
-                self.state = BotStates.HAVE_BALL
-            elif (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:  # Lost sight of ball for some time
+            if (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:  # Lost sight of ball for some time
                 self.state = BotStates.NO_SEE_BALL   
-            
+            elif self.have_ball:  # Captured ball
+                self.state = BotStates.HAVE_BALL
         
         elif self.state == BotStates.HAVE_BALL:
-            self.update_possession_state()
             if not self.have_ball:  # Lost possession
                 self.state = BotStates.CHASING_BALL
                 self.possession_state = PossessionStates.NONE
+                return
+            self.update_possession_state()
 
 
     def execute_behaviour(self):
         """Execute the current state's behaviour"""
+        self.target_yaw = 0
         if self.state == BotStates.NO_SEE_BALL:
             # self.target_yaw = self.wrap_angle(self.target_yaw + 1)
             # Search for ball or go defend goal
             # TODO: Implement search pattern (rotate, move to center, etc.)
             self.move_dir = 0
             self.move_spd = 0
-            self.dribble() # Just in case
         
         elif self.state == BotStates.CHASING_BALL:
-            self.target_yaw = 0
             # Chase and capture ball
-            self.move_spd = self.BASE_BALL_CHASE_SPD
-            if self.see_ball:
-                self.ball_capture()
+            self.ball_capture()
         
         elif self.state == BotStates.HAVE_BALL:
             self.execute_have_ball_behaviour()
 
         elif self.state == BotStates.NONE:
-            self.drive.stop()
-            self.stop_dribbler()
+            pass
 
     
     # Possession logic
@@ -281,6 +281,7 @@ class AttackBot():
             if self.see_goal and self.goal_dir is not None:
                 self.move_dir = self.goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
+                self.target_yaw = self.goal_dir
             else:
                 # TODO: Add actual find goal behaviour
                 self.move_dir = 0
@@ -327,8 +328,8 @@ class AttackBot():
         elif self.possession_state == PossessionStates.READY_TO_SHOOT:
             self.move_dir = 0
             self.move_spd = 0
+            self.stop_dribbler()
             self.kick()
-            time.sleep(0.1)
 
 
     def is_ready_to_shoot(self):
@@ -341,30 +342,47 @@ class AttackBot():
         
 
     def ball_capture(self):
-        """Ball capture algorithm from 2025"""
-        # A lot of magic numbers here, I cbb making constants for all of them
+        """Go around ball and try to capture it with dribbler"""
+        self.move_spd = self.BASE_BALL_CHASE_SPD
+        # Sorry, a lot of magic numbers here, I cbb making constants for all of them
+        # https://yuta.techblog.jp/archives/40889399.html
 
-        if self.have_ball or self.ball_dist < self.DRIBBLE_DISTANCE_THRESHOLD:
-            self.dribble()
+        if self.see_ball:
+            ball_dir = self.ball_dir
+            ball_dist = self.ball_dist
         else:
-            self.stop_dribbler()
+            ball_dir = self.last_ball_dir
+            ball_dist = self.last_ball_dist
+        ball_pos_x = ball_dist * math.sin(math.radians(ball_dir))
 
         # If ball is in front, move towards it
-        if self.have_ball or -15 <= self.ball_dir <= 15:
-            self.move_dir = self.ball_dir * 1.5
+        if self.have_ball or (-15 <= ball_dir <= 15 and abs(ball_pos_x) < self.CAPTURE_WIDTH):
+            # PD Calculations
+            error_x = ball_pos_x
+            derivative_x = (error_x - self.prev_ball_x_error) / self.dt if self.dt > 0 else 0
+            self.prev_ball_x_error = error_x
+
+            move_vel_x = (error_x * self.CAPTURE_KP) + (derivative_x * self.CAPTURE_KD) # PD
+            move_vel_y = (math.sqrt(self.CAPTURE_WIDTH) - math.sqrt(abs(ball_pos_x))) / math.sqrt(self.CAPTURE_WIDTH) * self.BASE_BALL_CHASE_SPD # Moves forward fast the more centered it is
+
+            self.move_dir = math.degrees(math.atan2(move_vel_x, move_vel_y)) # Calculate direction of movement vector
+            self.move_spd = math.sqrt(move_vel_x**2 + move_vel_y**2) # Calculate magnitude of movement vector
+
+            if ball_dist < 50 or self.have_ball:
+                self.dribble()
 
         # Else if too close to ball, go away from it
-        elif self.ball_dist < 30:
-            distance_ratio = (self.BALL_ORBIT_RADIUS - self.ball_dist) / self.BALL_ORBIT_RADIUS
+        elif ball_dist < 20:
+            distance_ratio = (self.BALL_ORBIT_RADIUS - ball_dist) / self.BALL_ORBIT_RADIUS
             orbit_angle = 90 + distance_ratio * 90
-            self.move_dir = self.ball_dir + np.copysign(orbit_angle, self.ball_dir)
+            self.move_dir = ball_dir + np.copysign(orbit_angle, ball_dir)
 
         # Else move in an angle that is tangent to a circle centered at the ball
         else:
-            if self.BALL_ORBIT_RADIUS / self.ball_dist > 1:
+            if self.BALL_ORBIT_RADIUS / ball_dist > 1:
                 print("arcsin argument is > 1. Adjust BALL_ORBIT_RADIUS")
             else:
-                self.move_dir = self.ball_dir + np.copysign(math.degrees(np.asin(self.BALL_ORBIT_RADIUS / self.ball_dist)), self.ball_dir)
+                self.move_dir = ball_dir + np.copysign(math.degrees(np.asin(self.BALL_ORBIT_RADIUS / ball_dist)), ball_dir)
 
         
     # ------ Primitive actions ------ #
@@ -374,9 +392,6 @@ class AttackBot():
 
     def dribble(self):
         self.dribbler.set_speed(self.DRIBBLER_ROT_SPD)
-
-    def stop_dribbler(self):
-        self.dribbler.set_speed(0)
 
     def kick(self):
         self.kicker.kick()
@@ -410,6 +425,8 @@ class AttackBot():
               f"Ball: {self.see_ball} (dir={ball_dir}, dist={ball_dist}) | "
               f"Goal: {self.see_goal} (dir={goal_dir})")
     
+
+
 
 if __name__ == "__main__":
     bot1 = AttackBot()
