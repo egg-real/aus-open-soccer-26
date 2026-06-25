@@ -425,6 +425,13 @@ class Robot():
                 print("arcsin argument is > 1. Adjust BALL_ORBIT_RADIUS")
             else:
                 self.move_dir = ball_dir + np.copysign(math.degrees(np.asin(self.BALL_ORBIT_RADIUS / ball_dist)), ball_dir)
+            
+                # Test logic to handle moving balls by adjusting movement speed
+                distance_rate = (self.last_ball_dist - ball_dist) / self.dt if self.dt > 0 else 0
+                expected_closing_rate = self.move_spd * math.cos(math.radians(abs(self.move_dir - ball_dir)))
+
+                if expected_closing_rate > 10:
+                    self.move_spd *= 2 - max(0, min(2, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
 
         
     # ------ Primitive actions ------ #
