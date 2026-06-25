@@ -473,7 +473,7 @@ class Robot():
         ball_dir = f"{self.ball_dir:.1f}°" if self.ball_dir is not None else "None"
         ball_dist = f"{self.ball_dist:.0f}mm" if self.ball_dist is not None else "None"
         goal_dir = f"{self.goal_dir:.1f}°" if self.goal_dir is not None else "None"
-        print(f"State: {self.state.name} | Possession: {self.possession_state.name} | "
+        print(f"Mode: {self.mode.name} | State: {self.state.name} | Possession: {self.possession_state.name} | "
               f"Ball: {self.see_ball} (dir={ball_dir}, dist={ball_dist}) | "
               f"Goal: {self.see_goal} (dir={goal_dir})")
     
@@ -493,3 +493,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Shutting down...")
         bot1.drive.stop()
+        Dribbler.set_speed(0)
