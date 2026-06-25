@@ -183,6 +183,10 @@ class Robot():
             self.own_goal_dir = None
             self.own_goal_dist = None
 
+        if self.goal_dir is None:
+            self.goal_dist = math.sqrt(self.own_goal_dist ** 2 + 3348900 + 3660 * math.cos(math.radians(self.own_goal_dir)))
+            self.goal_dir = math.degrees(1830 * math.cos(math.radians(self.own_goal_dir)) / self.goal_dist - math.radians(self.own_goal_dir))
+
         self.have_ball = self.break_beam.read()
         self.see_ball = self.ball_dir is not None and self.ball_dist is not None
         self.see_goal = self.goal_dir is not None
