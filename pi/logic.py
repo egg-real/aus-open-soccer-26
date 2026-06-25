@@ -9,6 +9,11 @@ from camera import Cameras
 from lib.break_beam import BreakBeam
 import board
 
+from kicker import Kicker
+
+SOLENOID_PIN = board.D27
+PULSE_S = 0.02
+
 # ----- MODES/STATES ----- #
 class RobotState(Enum):
     NONE = -1
@@ -58,8 +63,7 @@ class Robot():
         self.BALL_ORBIT_RADIUS = 14  # might be an arbitrary number
         self.GIVE_UP_CHASING_BALL_TIME = 1.5 # seconds
 
-        self.READY_TO_SHOOT_ANGLE = 15  # degrees
-        self.READY_TO_SHOOT_DISTANCE = 40
+        self.READY_TO_SHOOT_ANGLE = 10  # degrees
 
         self.DRIBBLER_ROT_SPD = -1.0
         self.POSSESSION_ROT_SPD = 0.1
@@ -101,6 +105,7 @@ class Robot():
         self.cameras.start_streaming()
         self.dribbler = Dribbler()
         self.break_beam = BreakBeam(board.D17)
+        self.kicker = Kicker(SOLENOID_PIN, PULSE_S)
 
         # Variables
         ## Time
@@ -179,10 +184,13 @@ class Robot():
             self.own_goal_dist = None
 
         self.have_ball = self.break_beam.read()
-        self.see_ball = self.have_ball or (self.ball_dir is not None and self.ball_dist is not None)
+        self.see_ball = self.ball_dir is not None and self.ball_dist is not None
         self.see_goal = self.goal_dir is not None
 
         # TODO: Update self.x_coord and self.y_coord if localisation works
+
+        if self.see_ball or self.have_ball:
+            self.last_ball_see_time = time.monotonic()
     
         # State machine
             
@@ -315,8 +323,9 @@ class Robot():
                 self.move_spd = self.HEAD_TO_GOAL_SPD
                 self.target_yaw = self.goal_dir
             else:
+                # TODO: Add actual find goal behaviour
                 self.move_dir = 0
-                self.move_spd = 0
+                self.move_spd = 0.1
 
         elif self.possession_state == PossessionState.BALL_HIDING:
             if self.is_ready_to_shoot():
@@ -359,7 +368,7 @@ class Robot():
         elif self.possession_state == PossessionState.READY_TO_SHOOT:
             self.move_dir = 0
             self.move_spd = 0
-            self.dribbler.set_speed(0)
+            self.stop_dribbler()
             self.kick()
 
 
@@ -427,8 +436,7 @@ class Robot():
         self.dribbler.set_speed(self.DRIBBLER_ROT_SPD)
 
     def kick(self):
-        print("KICK")
-        # TODO: actually kick
+        self.kicker.kick()
 
     # ------ Misc functions ------ #
 
