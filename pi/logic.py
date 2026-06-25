@@ -442,6 +442,9 @@ class Robot():
     def dribble(self):
         self.dribbler.set_speed(self.DRIBBLER_ROT_SPD)
 
+    def stop_dribbler(self):
+        self.dribbler.set_speed(0)
+
     def kick(self):
         self.kicker.kick()
 
