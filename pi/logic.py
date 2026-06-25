@@ -9,14 +9,14 @@ from camera import Cameras
 from lib.break_beam import BreakBeam
 import board
 
-# ----- Main Thing ----- #
-class BotStates(Enum):
+# ----- MODES/STATES ----- #
+class RobotState(Enum):
     NONE = -1
     NO_SEE_BALL = 0
     CHASING_BALL = 1
     HAVE_BALL = 2
 
-class PossessionStates(Enum):
+class PossessionState(Enum):
     NONE = -1
     HEADING_TO_GOAL = 0
     READY_TO_SHOOT = 1
@@ -29,8 +29,13 @@ class GoalColour(Enum):
     BLUE = "Blue"
     YELLOW = "Yellow"
 
-
-class AttackBot():
+class RobotMode(Enum):
+    PENALTY = 0
+    OFFENCE = 1
+    DEFENCE = 2
+    
+# ----- Main logic ----- #
+class Robot():
 
     def on_startup(self):
         """Initialise"""
@@ -41,7 +46,10 @@ class AttackBot():
         # ----- TARGET GOAL ----- #
         self.target_goal = GoalColour.BLUE
         self.TARGET_GOAL_Y = 110  # TODO: Tune value
-        
+
+        # Role
+        self.mode = RobotMode.OFFENCE
+
         # Constants
         ## General
         self.BASE_BALL_CHASE_SPD = 0.6
@@ -63,23 +71,25 @@ class AttackBot():
         self.CRAB_WALK_STOP_Y = 70 # When crab walking across the side, if y_coord is > this number, stop and turn towards the goal. 
         self.CRAB_WALK_X = 75 # When crab walking across the side, aim to be at this x coord 
 
-        # Ball capture PD control
+        ## Ball capture PD control
         self.CAPTURE_WIDTH = 4 # Max lateral distance to decide to move forward (close to cm)
         self.CAPTURE_KP = 0.8
         self.CAPTURE_KD = 0.1
 
         self.prev_ball_x_error = 0.0 # Memory for the PD controller
-        
-        
 
+        ## Goalie tuning
+        self.TURN_TO_OFFENCE_BALL_DIST = 15
+        self.DEFENCE_GOAL_DIST = 40
+        
 
         # Toggles
         self.ENABLE_EDGE_BALL_HIDE = False
         self.ENABLE_BALL_SPIN_SHOOT = False
 
         # States
-        self.state : BotStates = BotStates.NONE
-        self.possession_state : PossessionStates = PossessionStates.NONE
+        self.state : RobotState = RobotState.NONE
+        self.possession_state : PossessionState = PossessionState.NONE
         self.see_ball = False
         self.have_ball = False
         self.see_goal = False
@@ -175,7 +185,7 @@ class AttackBot():
         # TODO: Update self.x_coord and self.y_coord if localisation works
     
         # State machine
-        self.update_main_state()
+            
         self.execute_behaviour()
         
         # Execute movement
@@ -184,84 +194,114 @@ class AttackBot():
 
     # ------ State Machine ------ #
     # General logic
-    def update_main_state(self):
-        """Top-level state transitions"""
-        if self.state == BotStates.NONE:
-            self.state = BotStates.NO_SEE_BALL
-        
-        elif self.state == BotStates.NO_SEE_BALL:
-            if self.see_ball:  # Found ball via camera
-                self.state = BotStates.CHASING_BALL
-            elif self.have_ball:  # Break beam triggered (gained possession without camera seeing)
-                self.state = BotStates.HAVE_BALL
-        
-        elif self.state == BotStates.CHASING_BALL:
-            if (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:  # Lost sight of ball for some time
-                self.state = BotStates.NO_SEE_BALL   
-            elif self.have_ball:  # Captured ball
-                self.state = BotStates.HAVE_BALL
-        
-        elif self.state == BotStates.HAVE_BALL:
-            if not self.have_ball:  # Lost possession
-                self.state = BotStates.CHASING_BALL
-                self.possession_state = PossessionStates.NONE
-                return
-            self.update_possession_state()
-
-
     def execute_behaviour(self):
-        """Execute the current state's behaviour"""
+        """Execute behaviour based on robot role"""
         self.target_yaw = 0
-        if self.state == BotStates.NO_SEE_BALL:
-            # self.target_yaw = self.wrap_angle(self.target_yaw + 1)
-            # Search for ball or go defend goal
-            # TODO: Implement search pattern (rotate, move to center, etc.)
-            self.move_dir = 0
-            self.move_spd = 0
-        
-        elif self.state == BotStates.CHASING_BALL:
-            # Chase and capture ball
-            self.ball_capture()
-        
-        elif self.state == BotStates.HAVE_BALL:
-            self.execute_have_ball_behaviour()
 
-        elif self.state == BotStates.NONE:
+        if self.mode == RobotMode.OFFENCE:
+            self.update_offence_state()
+            self.execute_offence()
+
+        elif self.mode == RobotMode.DEFENCE:
+            self.execute_defence()
+
+        elif self.mode == RobotMode.PENALTY:
             pass
 
+
+    def update_offence_state(self):
+        """Top-level state transitions"""
+        if self.state == RobotState.NONE:
+            self.state = RobotState.NO_SEE_BALL
+        
+        elif self.state == RobotState.NO_SEE_BALL:
+            if self.see_ball:  # Found ball via camera
+                self.state = RobotState.CHASING_BALL
+            elif self.have_ball:  # Break beam triggered (gained possession without camera seeing)
+                self.state = RobotState.HAVE_BALL
+        
+        elif self.state == RobotState.CHASING_BALL:
+            if (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:  # Lost sight of ball for some time
+                self.state = RobotState.NO_SEE_BALL   
+                self.mode = RobotMode.DEFENCE
+            elif self.have_ball:  # Captured ball
+                self.state = RobotState.HAVE_BALL
+        
+        elif self.state == RobotState.HAVE_BALL:
+            if not self.have_ball:  # Lost possession
+                self.state = RobotState.CHASING_BALL
+                self.possession_state = PossessionState.NONE
+                return
+            self.update_possession_state()
+    
+    def execute_offence(self):
+        # State transitions for offence
+        if self.state == RobotState.NO_SEE_BALL:
+            self.move_dir = 0
+            self.move_spd = 0
+
+        elif self.state == RobotState.CHASING_BALL:
+            self.ball_capture()
+
+        elif self.state == RobotState.HAVE_BALL:
+            self.execute_have_ball_behaviour()
+
+        elif self.state == RobotState.NONE:
+            pass
+    
+    def execute_defence(self):
+        # If ball very close, turn to attack mode
+        if self.see_ball and self.ball_dist is not None and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST:
+            self.mode = RobotMode.OFFENCE
+            return
+        
+        # Stay near own goal
+        if self.own_goal_dir is not None and self.own_goal_dist is not None and abs(self.own_goal_dist - self.DEFENCE_GOAL_DIST) > 5:
+            # If ball is behind, try to swerve around it
+            if self.see_ball and self.ball_dir is not None and abs(self.own_goal_dir - self.ball_dir) < 10: 
+                self.ball_capture()
+            else:            
+                self.move_dir = self.own_goal_dir
+                self.move_spd = self.HEAD_TO_OWN_GOAL_SPD
+        else:
+            if self.see_ball:
+                self.ball_capture()
+
+        # Face forward
+        self.target_yaw = 0
     
     # Possession logic
     def update_possession_state(self):
         """Possession sub-state transitions while the bot has the ball."""
         if not self.have_ball:
-            self.state = BotStates.CHASING_BALL
-            self.possession_state = PossessionStates.NONE
+            self.state = RobotState.CHASING_BALL
+            self.possession_state = PossessionState.NONE
             return
 
-        if self.possession_state == PossessionStates.NONE:
+        if self.possession_state == PossessionState.NONE:
             if self.ENABLE_EDGE_BALL_HIDE and abs(self.x_coord) > self.EDGE_BALL_HIDE_MIN_X:
-                self.possession_state = PossessionStates.BALL_HIDING
+                self.possession_state = PossessionState.BALL_HIDING
             else:
-                self.possession_state = PossessionStates.HEADING_TO_GOAL
+                self.possession_state = PossessionState.HEADING_TO_GOAL
             return
 
-        if self.possession_state == PossessionStates.HEADING_TO_GOAL:
+        if self.possession_state == PossessionState.HEADING_TO_GOAL:
             if self.is_ready_to_shoot():
-                self.possession_state = PossessionStates.READY_TO_SHOOT
+                self.possession_state = PossessionState.READY_TO_SHOOT
             return
 
-        if self.possession_state == PossessionStates.BALL_HIDING:
+        if self.possession_state == PossessionState.BALL_HIDING:
             if self.is_ready_to_shoot():
-                self.possession_state = PossessionStates.READY_TO_SHOOT
+                self.possession_state = PossessionState.READY_TO_SHOOT
             return
 
-        if self.possession_state == PossessionStates.SPIN_SHOOT:
+        if self.possession_state == PossessionState.SPIN_SHOOT:
             print("No code for this yet, please set ENABLE_BALL_SPIN_SHOOT to False")
             return
 
-        if self.possession_state == PossessionStates.READY_TO_SHOOT:
+        if self.possession_state == PossessionState.READY_TO_SHOOT:
             if not self.is_ready_to_shoot():
-                self.possession_state = PossessionStates.HEADING_TO_GOAL
+                self.possession_state = PossessionState.HEADING_TO_GOAL
             return
 
 
@@ -269,7 +309,7 @@ class AttackBot():
         """Ball possession behaviour"""
         self.dribble()  # Keep dribbler running
 
-        if self.possession_state == PossessionStates.HEADING_TO_GOAL:
+        if self.possession_state == PossessionState.HEADING_TO_GOAL:
             if self.see_goal and self.goal_dir is not None:
                 self.move_dir = self.goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
@@ -278,7 +318,7 @@ class AttackBot():
                 self.move_dir = 0
                 self.move_spd = 0
 
-        elif self.possession_state == PossessionStates.BALL_HIDING:
+        elif self.possession_state == PossessionState.BALL_HIDING:
             if self.is_ready_to_shoot():
                 self.move_dir = 0
                 self.move_spd = 0
@@ -311,12 +351,12 @@ class AttackBot():
                 self.move_dir = 0
                 self.move_spd = self.EDGE_BALL_HIDE_Y_SPD
 
-        elif self.possession_state == PossessionStates.SPIN_SHOOT:
+        elif self.possession_state == PossessionState.SPIN_SHOOT:
             print("No code for this yet, please set ENABLE_BALL_SPIN_SHOOT to False")
             self.move_dir = 0
             self.move_spd = 0
 
-        elif self.possession_state == PossessionStates.READY_TO_SHOOT:
+        elif self.possession_state == PossessionState.READY_TO_SHOOT:
             self.move_dir = 0
             self.move_spd = 0
             self.dribbler.set_speed(0)
@@ -328,9 +368,9 @@ class AttackBot():
             self.have_ball
             and self.see_goal
             and self.goal_dir is not None
-            and self.ball_dist is not None
+            and self.goal_dist is not None
             and abs(self.goal_dir) < self.READY_TO_SHOOT_ANGLE
-            and self.ball_dist < self.READY_TO_SHOOT_DISTANCE
+            and self.goal_dist < self.READY_TO_SHOOT_DISTANCE
         )
         
 
@@ -423,7 +463,7 @@ class AttackBot():
 
 
 if __name__ == "__main__":
-    bot1 = AttackBot()
+    bot1 = Robot()
     bot1.on_startup()
     
     try:
