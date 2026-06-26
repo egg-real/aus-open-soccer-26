@@ -6,10 +6,11 @@ import lib.config as config
 from lib.imu import IMU
 from math import radians, sin
 
-SMOOTHING_TIME = 0.30
+SMOOTHING_TIME = 0.10
 YAW_CORRECT_THRESHOLD = 3.0
-YAW_CORRECT_SPEED = 0.5
-POSSESSION_YAW_CORRECT_SPEED = 0.05
+YAW_CORRECT_SPEED = 1.0
+POSSESSION_YAW_CORRECT_SPEED = 0.3
+YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle yaw correction will be at the maximum speed.
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
@@ -99,7 +100,7 @@ class Drive:
             return 0
 
         return clamp(
-            (yaw_error / 60.0) * yaw_correct_speed,
+            (yaw_error / YAW_CORRECT_MAX_SPEED_THRESHOLD) * yaw_correct_speed,
             -yaw_correct_speed,
             yaw_correct_speed,
         )
@@ -125,6 +126,46 @@ class Drive:
 
         self.current_direction = math.degrees(math.atan2(new_dy, new_dx))
         self.current_speed = math.hypot(new_dx, new_dy)
+
+    def get_body_velocity(self):
+        """Return measured body-frame velocity (vx, vy) in m/s from wheel QDR.
+
+        Inverts the omni mixing used in _drive_loop:
+        w_i = vx*sin(angle_off_i) - vy*cos(angle_off_i)
+        """
+        motors_config = config.get_value("motors")
+        ata_00 = 0.0
+        ata_01 = 0.0
+        ata_11 = 0.0
+        atb_0 = 0.0
+        atb_1 = 0.0
+
+        for motor_direction, motor in self.motors.items():
+            motor.update_quick_data_readout()
+            wheel_speed = motor.get_wheel_speed()
+            angle_off = math.radians(motors_config[motor_direction]["angle_off"])
+            sin_a = math.sin(angle_off)
+            cos_a = math.cos(angle_off)
+
+            ata_00 += sin_a * sin_a
+            ata_01 -= sin_a * cos_a
+            ata_11 += cos_a * cos_a
+            atb_0 += sin_a * wheel_speed
+            atb_1 -= cos_a * wheel_speed
+
+        det = ata_00 * ata_11 - ata_01 * ata_01
+        if abs(det) < 1e-9:
+            return 0.0, 0.0
+
+        vx = (ata_11 * atb_0 - ata_01 * atb_1) / det
+        vy = (ata_00 * atb_1 - ata_01 * atb_0) / det
+        return vx, vy
+
+    def get_speed_in_direction(self, direction_deg):
+        """Return signed speed (m/s) along a body-frame direction."""
+        vx, vy = self.get_body_velocity()
+        direction = math.radians(direction_deg)
+        return vx * math.cos(direction) + vy * math.sin(direction)
 
     def stop(self):
         with self.target_lock:
