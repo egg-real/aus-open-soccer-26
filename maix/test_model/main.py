@@ -1,6 +1,7 @@
 
 from maix import camera, display, image, nn, app, comm
-import struct, os
+import struct
+import os
 
 report_on = True
 APP_CMD_DETECT_RES = 0x02

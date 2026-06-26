@@ -1,5 +1,4 @@
 import threading
-import queue
 import atexit
 import serial
 import time

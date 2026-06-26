@@ -4,7 +4,6 @@ import json
 import threading
 import cv2
 import base64
-import socket
 
 class WSServerHandlerID:
     def __init__(self, message, index):

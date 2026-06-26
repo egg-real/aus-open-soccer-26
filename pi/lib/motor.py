@@ -3,9 +3,7 @@ Brushless DC Motor Library ported to python
 """
 
 import smbus2
-import time
 import struct
-import asyncio
 import math
 
 MAX_SPEED = 92_000_000

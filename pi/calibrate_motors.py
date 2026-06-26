@@ -2,7 +2,6 @@
 import time
 import sys
 import board
-import struct
 import busio
 import select
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver

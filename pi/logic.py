@@ -2,7 +2,6 @@ import numpy as np
 import math
 import time
 from enum import Enum
-import json
 from lib.dribbler import Dribbler
 from lib.drive import Drive
 from camera import Cameras
@@ -232,8 +231,6 @@ class Robot():
 
     def update_offence_state(self):
         ball_dir = self.ball_dir if self.ball_dir is not None else self.last_ball_dir
-        ball_dist = self.ball_dist if self.ball_dist is not None else self.last_ball_dist
-        ball_pos_x = ball_dist * math.sin(math.radians(ball_dir))
         """Top-level state transitions"""
         if self.state == RobotState.NONE:
             self.state = RobotState.NO_SEE_BALL

@@ -1,9 +1,5 @@
 from lib.drive import Drive
 from lib.interface import WSServer
-from lib import config
-import picamera2
-from libcamera import controls
-import cv2
 import numpy as np
 
 # Drive

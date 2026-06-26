@@ -1,7 +1,6 @@
 from maix import camera, display, image
 import numpy as np
 import math
-import os
 
 IMG_WIDTH = 640
 IMG_HEIGHT = 360
