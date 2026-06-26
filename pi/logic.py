@@ -10,8 +10,13 @@ from lib.break_beam import BreakBeam
 import board
 
 from kicker import Kicker
+from lib.comm_module import CommModule
+from pi.test_comm_module import comm_module
+
+USE_COMM_MODULE = False
 
 SOLENOID_PIN = board.D27
+COMM_MODULE_PIN = board.D18
 PULSE_S = 0.02
 
 # ----- MODES/STATES ----- #
@@ -46,11 +51,11 @@ class Robot():
     def on_startup(self):
         """Initialise"""
         # Load motor config
-        with open("/home/dsa/Robotics/config.json") as f:
-            config = json.load(f)
+        # with open("/home/dsa/Robotics/config.json") as f:
+        #     config = json.load(f)
 
         # ----- TARGET GOAL ----- #
-        self.target_goal = GoalColour.YELLOW
+        self.target_goal = GoalColour.BLUE
         self.TARGET_GOAL_Y = 110  # TODO: Tune value
 
         # Role
@@ -58,12 +63,12 @@ class Robot():
 
         # Constants
         ## General
-        self.BASE_BALL_CHASE_SPD = 0.8
-        self.CLOSE_BALL_CHASE_SPD = 0.5
+        self.BASE_BALL_CHASE_SPD = 1.0
+        self.CLOSE_BALL_CHASE_SPD = 0.6
         self.HEAD_TO_GOAL_SPD = 0.6
         self.HEAD_TO_OWN_GOAL_SPD = 0.4
         self.BALL_ORBIT_RADIUS = 14  # might be an arbitrary number
-        self.GIVE_UP_CHASING_BALL_TIME = 1.5 # seconds
+        self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
 
         self.READY_TO_SHOOT_ANGLE = 15  # degrees
         self.READY_TO_SHOOT_DISTANCE = 125
@@ -79,9 +84,9 @@ class Robot():
         self.CRAB_WALK_X = 75 # When crab walking across the side, aim to be at this x coord
 
         ## Ball capture PD control
-        self.CAPTURE_WIDTH = 100 # Max lateral distance to decide to move forward (close to cm)
+        self.CAPTURE_WIDTH = 50 # Max lateral distance to decide to move forward (close to cm)
         self.CAPTURE_KP = 0.01
-        self.CAPTURE_KD = 0.001
+        self.CAPTURE_KD = 0.01
 
         self.prev_ball_x_error = 0.0 # Memory for the PD controller
 
@@ -109,6 +114,8 @@ class Robot():
         self.dribbler = Dribbler()
         self.break_beam = BreakBeam(board.D17)
         self.kicker = Kicker(SOLENOID_PIN, PULSE_S)
+        if USE_COMM_MODULE:
+            self.comm_module = CommModule(COMM_MODULE_PIN)
 
         # Variables
         ## Time
@@ -199,8 +206,11 @@ class Robot():
 
         self.execute_behaviour()
 
-        # Execute movement
-        self.move()
+        if USE_COMM_MODULE and comm_module.read():
+            self.drive.stop()
+        else:
+            # Execute movement
+            self.move()
 
 
     # ------ State Machine ------ #
@@ -399,7 +409,7 @@ class Robot():
 
 
     def is_ready_to_shoot(self):
-        print(self.goal_dir, self.goal_dist)
+        print(self.goal_dir, self.goal_dist, self.own_goal_dir, self.own_goal_dist)
         return (
             self.have_ball
             and self.see_goal
@@ -445,7 +455,7 @@ class Robot():
                     self.move_spd *= 2 - max(0, min(2, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
 
     def lining_up(self):
-        print("LINING UP")
+        # print("LINING UP")
         ball_dir = self.ball_dir if self.ball_dir is not None else self.last_ball_dir
         ball_dist = self.ball_dist if self.ball_dist is not None else self.last_ball_dist
         ball_pos_x = ball_dist * math.sin(math.radians(ball_dir))
