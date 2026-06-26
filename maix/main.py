@@ -4,7 +4,7 @@ import numpy as np
 from camera import UART, CMD_STOP, CMD_DETECT, CMD_DEBUG, CMD_TRAINING
 
 model_path = "model.mud"
-detector = nn.YOLOv5(model=model_path)
+detector = nn.YOLO26(model=model_path)
 screenToWorldPolar = np.load("screen-2-world-polar.npy")
 
 IMG_WIDTH = 640
@@ -143,7 +143,7 @@ def find_closest_line(img):
 
     return closest
 
-DO_DISP = False
+DO_DISP = True
 
 # Quality (0-100) for frames streamed in DEBUG mode. Lower keeps the JPEG
 # small enough to push over the 115200 baud UART at a usable frame rate.
@@ -171,7 +171,7 @@ if DO_DISP:
 else:
     dis = None
 
-mode = MODE_STOPPED
+mode = MODE_DETECT
 debug_jpeg_quality = DEBUG_JPEG_QUALITY
 
 while not app.need_exit():
