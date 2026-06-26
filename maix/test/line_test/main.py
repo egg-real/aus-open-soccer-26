@@ -1,144 +1,153 @@
-from maix import camera, display, image
-import numpy as np
+from maix import app, camera, display, image
 import math
+import numpy as np
+import os
+import time
 
 IMG_WIDTH = 640
 IMG_HEIGHT = 360
 
-# Screen->world lookup, shape (640, 360, 2): [x][y] -> [angle_deg, distance_mm].
 _NPY_PATH = "screen-2-world-polar.npy"
 screenToWorldPolar = np.load(_NPY_PATH)
 
-
-def get_ground_xy(x_pixel, y_pixel):
-    """Convert a screen pixel to ground coords (mm) in the bot frame.
-
-    Returns (world_x, world_y) where world_x is lateral (right +) and world_y
-    is forward, or None when the pixel is outside the lookup table.
-    """
-    xi = int(round(x_pixel))
-    yi = int(round(y_pixel))
-    if xi < 0 or xi >= IMG_WIDTH or yi < 0 or yi >= IMG_HEIGHT:
-        return None
-
-    angle, distance = screenToWorldPolar[xi][yi]
-    angle_rad = math.radians(float(angle))
-    distance = float(distance)
-    world_x = distance * math.sin(angle_rad)
-    world_y = distance * math.cos(angle_rad)
-    return world_x, world_y
+LINE_COUNT = 5
+SAMPLE_COUNT = 16
+SAMPLE_MARGIN = 20
+BLACK_THRESHOLD = 400
+GREEN_RATIO_THRESHOLD = 35
 
 
-# ----- Thresholds (LAB, L range 0-100 for RGB888) ----- #
-WHITE = [[80, 100, -10, 10, -10, 10]]
-GREEN = [[0, 80, -120, -10, 0, 30]]
-MASK_WHITE = [[50, 100, -128, 127, -128, 127]]  # white pixels of a binary image
-
-# ----- Tuning knobs ----- #
-GREEN_DILATE = 2        # px to dilate green so it bridges over thin lines
-MIN_AREA = 60           # drop specks
-# A line is thin in one dimension and long in the other. Anything that is
-# chunky in both dimensions is some other white object, so reject it.
-MIN_ASPECT = 3.0        # major-axis length must be >= MIN_ASPECT * minor-axis
-MAX_THICKNESS = 40      # px; reject blobs whose short side is fatter than this
-MIN_LENGTH = 40         # px; reject stubs that are too short to trust as lines
-
-cam = camera.Camera(IMG_WIDTH, IMG_HEIGHT)
+cam = camera.Camera(IMG_WIDTH, IMG_HEIGHT, image.Format.FMT_RGB888)
 disp = display.Display()
 
 
-def _axis_length(axis_line):
-    x1, y1, x2, y2 = axis_line
-    return math.hypot(x2 - x1, y2 - y1)
+def get_polar(x_pixel, y_pixel):
+    xi = max(0, min(IMG_WIDTH - 1, int(round(x_pixel))))
+    yi = max(0, min(IMG_HEIGHT - 1, int(round(y_pixel))))
+    angle, distance = screenToWorldPolar[xi][yi]
+    return float(angle), float(distance)
 
 
-def is_line_shaped(blob):
-    """True when the blob is thin in one dimension and long in the other."""
-    if blob.area() < MIN_AREA:
+def get_ground_xy(x_pixel, y_pixel):
+    angle, distance = get_polar(x_pixel, y_pixel)
+    angle_rad = math.radians(angle)
+    return distance * math.sin(angle_rad), distance * math.cos(angle_rad)
+
+
+def is_black(pixel):
+    r, g, b = pixel
+    total = r + g + b
+    if total > BLACK_THRESHOLD:
         return False
-
-    major = _axis_length(blob.major_axis_line())
-    minor = _axis_length(blob.minor_axis_line())
-
-    if major < MIN_LENGTH:
-        return False
-    if minor > MAX_THICKNESS:
-        return False
-    if minor <= 0 or major / minor < MIN_ASPECT:
-        return False
-    return True
+    if total == 0:
+        return True
+    return (100 * g) / total <= GREEN_RATIO_THRESHOLD
 
 
-def closest_point_on_blob(blob):
-    """Closest point of the line to the camera, as (angle_deg, distance_mm).
+def scan_points(img):
+    black_samples = []
+    column_points = []
+    for x in sample_xs:
+        lowest = None
+        for y in sample_ys:
+            if is_black(img.get_pixel(x, y, rgbtuple=True)):
+                black_samples.append((x, y))
+                lowest = (x, y)
+        if lowest is not None:
+            column_points.append(lowest)
 
-    The camera sits at the ground-frame origin, so the closest point on the
-    line is the foot of the perpendicular dropped from the origin onto the
-    line. That perpendicular is, by definition, at right angles to the line
-    itself. We unproject the major-axis endpoints to the ground, then project
-    the origin onto that segment (clamped, so when the foot falls beyond an end
-    of the visible line the nearer endpoint is used instead).
-    Returns None if an endpoint can't be unprojected.
-    """
-    x1, y1, x2, y2 = blob.major_axis_line()
-    p1 = get_ground_xy(x1, y1)
-    p2 = get_ground_xy(x2, y2)
-    if p1 is None or p2 is None:
+    closest = None
+    closest_xy = None
+    for x, y in black_samples:
+        angle, distance = get_polar(x, y)
+        if closest is None or distance < closest[1]:
+            closest = (angle, distance)
+            closest_xy = (x, y)
+
+    return column_points, closest, closest_xy, set(black_samples)
+
+
+def wall_angle_deg(column_points):
+    ground_points = [get_ground_xy(x, y) for x, y in column_points]
+    if len(ground_points) < 2:
         return None
 
-    ax, ay = p1
-    bx, by = p2
-    dx, dy = bx - ax, by - ay
-    seg_len_sq = dx * dx + dy * dy
-    if seg_len_sq < 1e-6:
-        # Degenerate: endpoints unprojected to the same spot.
-        fx, fy = ax, ay
-    else:
-        # Param of the origin's projection onto the infinite line, clamped to
-        # the visible segment.
-        t = -(ax * dx + ay * dy) / seg_len_sq
-        t = max(0.0, min(1.0, t))
-        fx, fy = ax + dx * t, ay + dy * t
+    pts = np.array(ground_points, dtype=float)
+    pts -= pts.mean(axis=0)
+    if np.allclose(pts, 0):
+        return None
 
-    distance = math.hypot(fx, fy)
-    angle = math.degrees(math.atan2(fx, fy))
-    return angle, distance
+    _, _, vh = np.linalg.svd(pts)
+    dx, dy = vh[0]
+    return math.degrees(math.atan2(dx, dy))
 
 
-while True:
+def sample_positions(length, count):
+    if count <= 1:
+        return [length // 2]
+
+    span = length - (SAMPLE_MARGIN * 2)
+    step = span / (count - 1)
+    return [int(SAMPLE_MARGIN + (step * i)) for i in range(count)]
+
+
+sample_xs = sample_positions(IMG_WIDTH, LINE_COUNT)
+sample_ys = sample_positions(IMG_HEIGHT, SAMPLE_COUNT)
+
+last_time = time.time()
+frame_count = 0
+fps = 0
+
+while not app.need_exit():
     img = cam.read()
 
-    # Isolate white-on-green pixels so off-field white can't trigger a line.
-    green = img.binary(GREEN, copy=True)
-    green.dilate(GREEN_DILATE)
-    line_px = img.binary(WHITE, copy=True)
-    line_px.b_and(green)
+    column_points, closest, closest_xy, black_samples = scan_points(img)
+    wall_angle = wall_angle_deg(column_points)
 
-    blobs = line_px.find_blobs(MASK_WHITE, pixels_threshold=MIN_AREA,
-                               area_threshold=MIN_AREA, merge=True)
+    for x in sample_xs:
+        img.draw_line(x, 0, x, IMG_HEIGHT - 1, image.COLOR_BLUE, 1)
 
-    closest = None  # (angle_deg, distance_mm)
-    for blob in blobs:
-        if not is_line_shaped(blob):
-            # Not line shaped: likely another white object, ignore it.
-            continue
+    for x in sample_xs:
+        for y in sample_ys:
+            colour = image.COLOR_WHITE if (x, y) in black_samples else image.COLOR_BLACK
+            img.draw_circle(x, y, 3, colour, 1)
 
-        result = closest_point_on_blob(blob)
-        if result is None:
-            continue
-        if closest is None or result[1] < closest[1]:
-            closest = result
+    for x, y in column_points:
+        img.draw_circle(x, y, 5, image.COLOR_GREEN, 2)
 
-        x1, y1, x2, y2 = blob.major_axis_line()
-        img.draw_line(x1, y1, x2, y2, image.COLOR_RED, 2)
+    if closest_xy is not None:
+        img.draw_circle(closest_xy[0], closest_xy[1], 9, image.COLOR_YELLOW, 3)
 
-    if closest is None:
-        print("no line")
-        img.draw_string(0, 0, "no line", image.COLOR_BLUE)
+    if wall_angle is not None:
+        angle_text = "wall: %.1f deg (%d cols)" % (wall_angle, len(column_points))
     else:
-        angle, distance = closest
-        print("closest line: %.0f mm @ %.0f deg" % (distance, angle))
-        img.draw_string(0, 0, "closest: %.0f mm @ %.0f deg" % (distance, angle),
-                        image.COLOR_BLUE)
+        angle_text = "wall: unknown (%d cols)" % len(column_points)
+
+    if closest is not None:
+        closest_text = "closest: %.1f deg, %.0f mm" % closest
+    else:
+        closest_text = "closest: none"
+
+    img.draw_string(0, 0, angle_text, image.COLOR_BLUE)
+    img.draw_string(0, 16, closest_text, image.COLOR_BLUE)
+    img.draw_string(0, 32, "FPS: %.1f" % fps, image.COLOR_YELLOW)
+
+    frame_count += 1
+    now = time.time()
+    elapsed = now - last_time
+    if elapsed >= 1.0:
+        fps = frame_count / elapsed
+        last_time = now
+        frame_count = 0
+
+    if wall_angle is not None:
+        print("wall angle: %.1f deg (%d columns)" % (wall_angle, len(column_points)))
+    else:
+        print("wall angle: unknown (%d columns)" % len(column_points))
+
+    if closest is not None:
+        print("closest: angle=%.1f deg, distance=%.0f mm" % closest)
+    else:
+        print("closest: none")
 
     disp.show(img)
