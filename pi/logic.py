@@ -424,7 +424,7 @@ class Robot():
     
     
     def is_ready_to_rebound_shoot(self):
-        # https://www.desmos.com/calculator/ddluetmi1f
+        # https://www.desmos.com/calculator/ptfizmk1ut
         print(self.goal_dir, self.goal_dist)
         if (
             self.have_ball
