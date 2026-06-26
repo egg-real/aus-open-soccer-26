@@ -143,7 +143,7 @@ def find_closest_line(img):
 
     return closest
 
-DO_DISP = True
+DO_DISP = False
 
 # Quality (0-100) for frames streamed in DEBUG mode. Lower keeps the JPEG
 # small enough to push over the 115200 baud UART at a usable frame rate.
@@ -171,7 +171,7 @@ if DO_DISP:
 else:
     dis = None
 
-mode = MODE_DETECT
+mode = MODE_STOPPED
 debug_jpeg_quality = DEBUG_JPEG_QUALITY
 
 while not app.need_exit():
