@@ -1,6 +1,9 @@
 import math
 import time
 
+import board
+
+from kicker import Kicker
 from lib.dribbler import Dribbler
 from lib.drive import Drive, wrap_angle
 
@@ -9,6 +12,10 @@ STRAFE_SPEED = 0.4
 ORBIT_SIGN = 1  # +1 strafe right, -1 strafe left
 ORBIT_RADIUS_CM = 9.0  # distance from bot centre to ball
 UPDATE_INTERVAL_SECONDS = 0.02
+SPIN_DURATION_SECONDS = 2.0
+
+SOLENOID_PIN = board.D27
+PULSE_S = 0.02
 
 STRAFE_DIR = 90 * ORBIT_SIGN
 RAD_TO_DEG = 180.0 / math.pi
@@ -26,20 +33,28 @@ def get_orbit_yaw_rate_deg(strafe_speed_ms, orbit_radius_cm):
 if __name__ == "__main__":
     dribbler = Dribbler()
     drive = Drive()
+    kicker = Kicker(SOLENOID_PIN, PULSE_S)
 
     dribbler.set_speed(DRIBBLER_SPEED)
     target_yaw = 0.0
 
     try:
-        while True:
+        spin_end = time.monotonic() + SPIN_DURATION_SECONDS
+        while time.monotonic() < spin_end:
             strafe_speed_ms = drive.get_speed_in_direction(STRAFE_DIR)
             omega_deg = get_orbit_yaw_rate_deg(strafe_speed_ms, ORBIT_RADIUS_CM)
             target_yaw = wrap_angle(target_yaw + omega_deg * UPDATE_INTERVAL_SECONDS)
 
             drive.move(STRAFE_DIR, STRAFE_SPEED, target_yaw)
             time.sleep(UPDATE_INTERVAL_SECONDS)
+
+        drive.stop()
+        dribbler.set_speed(0)
+        kicker.kick()
+        time.sleep(PULSE_S + 0.1)
     except KeyboardInterrupt:
         pass
     finally:
         dribbler.set_speed(0)
         drive.stop()
+        kicker.deinit()

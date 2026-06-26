@@ -10,7 +10,6 @@ import board
 
 from kicker import Kicker
 from lib.comm_module import CommModule
-from pi.test_comm_module import comm_module
 
 USE_COMM_MODULE = False
 
@@ -536,6 +535,8 @@ class Robot():
 
     def wrap_angle(self, theta):
         """Input an angle in degrees\nReturns same angle but in [-180,180)"""
+        if theta == None:
+            return None
         return (theta + 180) % 360 - 180
 
     def print_state(self):
