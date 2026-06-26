@@ -53,9 +53,9 @@ class Robot():
         # with open("/home/dsa/Robotics/config.json") as f:
         #     config = json.load(f)
 
-        # ----- TARGET GOAL ----- #
-        self.target_goal = GoalColour.BLUE
-        self.TARGET_GOAL_Y = 110  # TODO: Tune value
+        # ----- SETTINGS ----- #
+        # Target Goal
+        self.target_goal = GoalColour.YELLOW
 
         # Role
         self.mode = RobotMode.OFFENCE
@@ -70,33 +70,37 @@ class Robot():
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
 
         self.READY_TO_SHOOT_ANGLE = 15  # degrees
-        self.READY_TO_SHOOT_DISTANCE = 125
+        self.READY_TO_SHOOT_DISTANCE = 125 # Note: This is currently unused
+
+        self.READY_TO_REBOUND_SHOOT_ANGLE = 15
+        self.READY_TO_REBOUND_SHOOT_DISTANCE = 50
+        self.REBOUND_SHOOT_PRECISION = 0.5 # Somewhere inbetween 0 and 2, lower the more precise
 
         self.DRIBBLER_ROT_SPD = -1.0
         self.POSSESSION_ROT_SPD = 0.1
 
         ## Ball Hiding TODO: Values & Thresholds to be tuned
-        self.EDGE_BALL_HIDE_X_SPD = 0.3
-        self.EDGE_BALL_HIDE_Y_SPD = 0.1
-        self.EDGE_BALL_HIDE_MIN_X = 40 # When gained possession of the ball, if x_coord is > this number, start edge hiding.
-        self.CRAB_WALK_STOP_Y = 70 # When crab walking across the side, if y_coord is > this number, stop and turn towards the goal.
-        self.CRAB_WALK_X = 75 # When crab walking across the side, aim to be at this x coord
+        self.EDGE_BALL_HIDE_X_SPD = 0.3 # Speed to move towards wall
+        self.EDGE_BALL_HIDE_Y_SPD = 0.1 # Speed to move towards goal
+        self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE = 70 # When gained possession of the ball, if x_coord is > this number, start edge hiding.
+        self.CRAB_WALK_DIST_TO_WALL = 40 # Aim to keep this distance from wall when crab walking
+        self.CRAB_WALK_ANGLE = 90 # Somewhere inbetween 45 to 135, 135 means it faces more towards own goal
+        self.TRIGGER_BALL_HIDE_WALL_DIST = 70
 
         ## Ball capture PD control
         self.CAPTURE_WIDTH = 50 # Max lateral distance to decide to move forward (close to cm)
         self.CAPTURE_KP = 0.01
-        self.CAPTURE_KD = 0.01
-
-        self.prev_ball_x_error = 0.0 # Memory for the PD controller
+        self.CAPTURE_KD = 0.001
 
         ## Goalie tuning
         self.TURN_TO_OFFENCE_BALL_DIST = 15
         self.DEFENCE_GOAL_DIST = 40
 
-
         # Toggles
         self.ENABLE_EDGE_BALL_HIDE = False
-        self.ENABLE_BALL_SPIN_SHOOT = False
+        self.ENABLE_FLICK_SHOT = False
+        self.ENABLE_REBOUND_SHOT = False
+
 
         # States
         self.state : RobotState = RobotState.NONE
@@ -124,11 +128,9 @@ class Robot():
         ## Movement
         self.move_spd = 0  # 0-1 normalised speed
         self.move_dir = 0
-        self.target_yaw = 0  # [-180, 180), 0 is front, positive is clockwise
+        self.target_yaw = 0  # [-180, 180), 0 is front, clockwise is increasing
 
         ## Position & Orientation data
-        self.x_coord = 0
-        self.y_coord = 0
         self.bot_dir = 0  # Compass sensor
 
         ## Ball
@@ -138,7 +140,7 @@ class Robot():
         self.last_ball_dist = 0
         self.last_ball_see_time = time.monotonic()
 
-        self.last_ball_x_error = 0 # Memory for ball capture PD controller
+        self.last_ball_x_error = 0 # Memory for ball_capture PD control
 
         ## Goal
         self.goal_dir = 0
@@ -168,21 +170,21 @@ class Robot():
             self.last_ball_dist = self.ball_dist
             self.last_ball_see_time = time.monotonic()
 
-        self.ball_dir = self.cameras.get_ball_dir()
+        self.ball_dir = self.wrap_angle(self.cameras.get_ball_dir())
         self.ball_dist = self.cameras.get_ball_dist()
-        self.line_dir = self.cameras.get_line_dir()
+        self.line_dir = self.wrap_angle(self.cameras.get_line_dir())
         self.line_dist = self.cameras.get_line_dist()
 
         if self.target_goal == GoalColour.BLUE:
-            self.goal_dir = self.cameras.get_blue_goal_dir()
+            self.goal_dir = self.wrap_angle(self.cameras.get_blue_goal_dir())
             self.goal_dist = self.cameras.get_blue_goal_dist()
-            self.own_goal_dir = self.cameras.get_yellow_goal_dir()
+            self.own_goal_dir = self.wrap_angle(self.cameras.get_yellow_goal_dir())
             self.own_goal_dist = self.cameras.get_yellow_goal_dist()
 
         elif self.target_goal == GoalColour.YELLOW:
-            self.goal_dir = self.cameras.get_yellow_goal_dir()
+            self.goal_dir = self.wrap_angle(self.cameras.get_yellow_goal_dir())
             self.goal_dist = self.cameras.get_yellow_goal_dist()
-            self.own_goal_dir = self.cameras.get_blue_goal_dir()
+            self.own_goal_dir = self.wrap_angle(self.cameras.get_blue_goal_dir())
             self.own_goal_dist = self.cameras.get_blue_goal_dist()
 
         else:
@@ -196,13 +198,10 @@ class Robot():
         self.see_ball = self.ball_dir is not None and self.ball_dist is not None
         self.see_goal = self.goal_dir is not None
 
-        # TODO: Update self.x_coord and self.y_coord if localisation works
-
         if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
 
         # State machine
-
         self.execute_behaviour()
 
         if USE_COMM_MODULE and comm_module.read():
@@ -231,6 +230,9 @@ class Robot():
 
     def update_offence_state(self):
         ball_dir = self.ball_dir if self.ball_dir is not None else self.last_ball_dir
+        ball_dist = self.ball_dist if self.ball_dist is not None else self.last_ball_dist
+        ball_pos_x = ball_dist * math.sin(math.radians(ball_dir))
+
         """Top-level state transitions"""
         if self.state == RobotState.NONE:
             self.state = RobotState.NO_SEE_BALL
@@ -315,7 +317,7 @@ class Robot():
             return
 
         if self.possession_state == PossessionState.NONE:
-            if self.ENABLE_EDGE_BALL_HIDE and abs(self.x_coord) > self.EDGE_BALL_HIDE_MIN_X:
+            if self.ENABLE_EDGE_BALL_HIDE and min(self.wall_dist(self.to_relative_dir(90)),self.wall_dist(self.to_relative_dir(-90))) < self.TRIGGER_BALL_HIDE_WALL_DIST:
                 self.possession_state = PossessionState.BALL_HIDING
             else:
                 self.possession_state = PossessionState.HEADING_TO_GOAL
@@ -332,7 +334,7 @@ class Robot():
             return
 
         if self.possession_state == PossessionState.SPIN_SHOOT:
-            print("No code for this yet, please set ENABLE_BALL_SPIN_SHOOT to False")
+            print("No code for this yet, please set ENABLE_FLICK_SHOT to False")
             return
 
         if self.possession_state == PossessionState.READY_TO_SHOOT:
@@ -356,45 +358,49 @@ class Robot():
                 self.target_yaw = -(self.own_goal_dir + 180) % 360
                 print(self.move_dir)
             else:
-                # TODO: Add actual find goal behaviour
+                # TODO: Move towards own goal or centre
                 self.move_dir = 0
                 self.move_spd = 0.1
 
         elif self.possession_state == PossessionState.BALL_HIDING:
+            # Can normally shoot
             if self.is_ready_to_shoot():
-                self.move_dir = 0
-                self.move_spd = 0
-                return
-
-            if self.y_coord > self.CRAB_WALK_STOP_Y:  # Close to goal, try to align kicker with goal
-                if self.see_goal and self.goal_dir is not None:
-                    self.target_yaw = self.to_absolute_dir(self.goal_dir)
-                    self.move_dir = 0
-                    self.move_spd = 0
-                else:
-                    goal_dir = self.angle_towards(self.x_coord, self.y_coord, 0, self.TARGET_GOAL_Y)
-                    self.move_dir = goal_dir
-                    self.move_spd = self.EDGE_BALL_HIDE_Y_SPD
-                    self.target_yaw = goal_dir
-                return
-
-            line_dir = self.line_dir
-            if line_dir is None:
-                self.move_dir = 0
-                self.move_spd = 0
-                return
-
-            self.target_yaw = line_dir
-
-            if abs(self.x_coord) < self.CRAB_WALK_X:
-                self.move_dir = line_dir
-                self.move_spd = self.EDGE_BALL_HIDE_X_SPD
+                self.possession_state = PossessionState.READY_TO_SHOOT
+            
+            # Can rebound shoot
+            elif self.ENABLE_REBOUND_SHOT and self.is_ready_to_rebound_shoot():
+                self.possession_state = PossessionState.READY_TO_SHOOT
+            
+            # Close to goal, but no rebound shoot opportunity found
+            elif self.goal_dist < self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE:
+                self.target_yaw = self.bot_dir + np.sign(self.goal_dir)
+            
+            # Else move toward side wall and goal
             else:
-                self.move_dir = 0
-                self.move_spd = self.EDGE_BALL_HIDE_Y_SPD
+                field_side = np.sign(self.wall_dist(self.to_relative_dir(-90)) - self.wall_dist(self.to_relative_dir(90))) # right: 1, left: -1
+                wall_error = self.CRAB_WALK_DIST_TO_WALL - self.wall_dist(self.to_absolute_dir(self.CRAB_WALK_ANGLE))
+
+                forward_dir = self.to_relative_dir(0)
+                correction_dir = self.to_relative_dir(field_side * 90)
+
+                correction_strength = 0.01 * wall_error  # TODO: Tune value
+
+                # Convert to vectors
+                forward_x = self.EDGE_BALL_HIDE_X_SPD * math.sin(math.radians(forward_dir))
+                forward_y = self.EDGE_BALL_HIDE_Y_SPD * math.cos(math.radians(forward_dir))
+
+                correction_x = correction_strength * math.sin(math.radians(correction_dir))
+                correction_y = correction_strength * math.cos(math.radians(correction_dir))
+
+                move_x = forward_x + correction_x
+                move_y = forward_y + correction_y
+
+                self.move_dir = math.degrees(math.atan2(move_x, move_y))
+                self.move_spd = min(math.sqrt(move_x**2 + move_y**2), 1)
+                    
 
         elif self.possession_state == PossessionState.SPIN_SHOOT:
-            print("No code for this yet, please set ENABLE_BALL_SPIN_SHOOT to False")
+            print("No code for this yet, please set ENABLE_FLICK_SHOT to False")
             self.move_dir = 0
             self.move_spd = 0
 
@@ -413,8 +419,29 @@ class Robot():
             and self.goal_dir is not None
             and self.goal_dist is not None
             and abs(self.goal_dir) < self.READY_TO_SHOOT_ANGLE
-            and self.goal_dist < self.READY_TO_SHOOT_DISTANCE
+            # and self.goal_dist < self.READY_TO_SHOOT_DISTANCE
         )
+    
+    
+    def is_ready_to_rebound_shoot(self):
+        # https://www.desmos.com/calculator/ddluetmi1f
+        print(self.goal_dir, self.goal_dist)
+        if (
+            self.have_ball
+            and self.see_goal
+            and self.goal_dir is not None
+            and self.goal_dist is not None
+            and abs(self.wrap_angle(self.bot_dir)) < 180 # Make sure it doesn't own goal
+            and self.goal_dist < self.READY_TO_REBOUND_SHOOT_DISTANCE
+        ):
+            
+            ratio = self.goal_dist * math.sin(np.radians(180-3*abs(self.bot_dir)-abs(self.goal_dir))) - self.wall_dist(self.bot_dir) * math.sin(np.radians(2*abs(self.bot_dir)))     
+            if abs(ratio) < self.REBOUND_SHOOT_PRECISION:
+                return True
+        return False
+
+    def wall_dist(relative_angle):
+        pass
 
 
     def ball_capture(self):
@@ -445,11 +472,11 @@ class Robot():
                 self.move_dir = ball_dir + np.copysign(math.degrees(np.asin(self.BALL_ORBIT_RADIUS / ball_dist)), ball_dir)
             
                 # Test logic to handle moving balls by adjusting movement speed
-                distance_rate = (self.last_ball_dist - ball_dist) / self.dt if self.dt > 0 else 0
-                expected_closing_rate = self.move_spd * math.cos(math.radians(abs(self.move_dir - ball_dir)))
+                # distance_rate = (self.last_ball_dist - ball_dist) / self.dt if self.dt > 0 else 0
+                # expected_closing_rate = self.move_spd * math.cos(math.radians(abs(self.move_dir - ball_dir)))
 
-                if expected_closing_rate > 10:
-                    self.move_spd *= 2 - max(0, min(2, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
+                # if expected_closing_rate > 10:
+                #     self.move_spd *= 2 - max(0, min(2, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
 
     def lining_up(self):
         # print("LINING UP")
@@ -461,8 +488,8 @@ class Robot():
         if self.see_ball:
             # PD Calculations
             error_x = ball_pos_x
-            derivative_x = (error_x - self.prev_ball_x_error) / self.dt if self.dt > 0 else 0
-            self.prev_ball_x_error = error_x
+            derivative_x = (error_x - self.last_ball_x_error) / self.dt if self.dt > 0 else 0
+            self.last_ball_x_error = error_x
 
             move_vel_x = (error_x * self.CAPTURE_KP) + (derivative_x * self.CAPTURE_KD) # PD
             move_vel_y = (math.sqrt(self.CAPTURE_WIDTH) - math.sqrt(abs(ball_pos_x))) / math.sqrt(self.CAPTURE_WIDTH) * self.BASE_BALL_CHASE_SPD # Moves forward fast the more centered it is
