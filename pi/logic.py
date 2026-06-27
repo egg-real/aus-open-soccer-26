@@ -73,6 +73,7 @@ class Robot():
 
         self.DRIBBLER_ROT_SPD = -1.0
         self.POSSESSION_ROT_SPD = 0.1
+        self.SPIN_SHOT_SPEED = 0.4
 
         ## Ball Hiding TODO: Values & Thresholds to be tuned
         self.EDGE_BALL_HIDE_X_SPD = 0.3 # Speed to move towards wall
@@ -310,7 +311,7 @@ class Robot():
             return
 
         if self.possession_state == PossessionState.NONE:
-            if self.ENABLE_EDGE_BALL_HIDE and min(self.wall_dist(self.to_relative_dir(90)),self.wall_dist(self.to_relative_dir(-90))) < self.TRIGGER_BALL_HIDE_LINE_DIST:
+            if self.ENABLE_EDGE_BALL_HIDE and min(self.line_dist(self.to_relative_dir(90)),self.line_dist(self.to_relative_dir(-90))) < self.TRIGGER_BALL_HIDE_WALL_DIST:
                 self.possession_state = PossessionState.BALL_HIDING
             else:
                 self.possession_state = PossessionState.HEADING_TO_GOAL
@@ -342,9 +343,7 @@ class Robot():
 
         if self.possession_state == PossessionState.HEADING_TO_GOAL:
             if self.see_goal and self.goal_dir is not None:
-                self.move_dir = self.goal_dir
-                self.move_spd = self.HEAD_TO_GOAL_SPD
-                self.target_yaw = self.goal_dir
+                self.drive.dribbler_spin(self.dribbler, math.copysign(1, self.goal_dir), self.SPIN_SHOT_SPEED, self.goal_dir, self.break_beam, self.kicker)
             elif self.see_own_goal and self.own_goal_dir is not None:
                 self.move_dir = -(self.own_goal_dir + 180) % 360
                 self.move_spd = self.HEAD_TO_GOAL_SPD
@@ -368,8 +367,8 @@ class Robot():
             
             # Else move toward side wall
             else:
-                field_side = np.sign(self.wall_dist(self.to_relative_dir(-90)) - self.wall_dist(self.to_relative_dir(90))) # right: 1, left: -1
-                wall_error = self.CRAB_WALK_DIST_TO_WALL - self.wall_dist(self.to_absolute_dir(self.CRAB_WALK_ANGLE))
+                field_side = np.sign(self.line_dist(self.to_relative_dir(-90)) - self.line_dist(self.to_relative_dir(90))) # right: 1, left: -1
+                wall_error = self.CRAB_WALK_DIST_TO_WALL - self.line_dist(self.to_absolute_dir(self.CRAB_WALK_ANGLE))
 
                 forward_dir = self.to_relative_dir(0)
                 correction_dir = self.to_relative_dir(field_side * 90)
@@ -437,6 +436,16 @@ class Robot():
 
     def line_dist(self, relative_angle):
         pass
+
+    def line_dir(self, relative_angle):
+        # Please make this output an angle relative to the field
+        pass
+
+    def wall_dist(self, relative_angle):
+        theta = self.line_dir(relative_angle) - self.bot_dir
+        return self.line_dist(relative_angle) + 12 / math.cos(math.radians(theta)) # 12cm is the distance from the centre of the line to the wall
+
+
 
     def line_dir(self, relative_angle):
         # Please make this output an angle relative to the field

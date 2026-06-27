@@ -12,6 +12,12 @@ YAW_CORRECT_SPEED = 1.0
 POSSESSION_YAW_CORRECT_SPEED = 0.3
 YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle yaw correction will be at the maximum speed.
 
+# Dribbler Spin Constants
+DRIBBLER_SPEED = 1.0
+ORBIT_RADIUS_CM = 9.0  # distance from bot centre to ball
+UPDATE_INTERVAL_SECONDS = 0.02
+RAD_TO_DEG = 180.0 / math.pi
+
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
@@ -72,6 +78,36 @@ class Drive:
             else:
                 self.target_yaw_correct_speed = YAW_CORRECT_SPEED
 
+    @staticmethod
+    def get_orbit_yaw_rate_deg(strafe_speed_ms, orbit_radius_cm):
+        """Yaw rate (deg/s) to stay tidally locked while orbiting at strafe_speed_ms."""
+        orbit_radius_m = orbit_radius_cm / 100.0
+        if orbit_radius_m <= 0:
+            return 0.0
+        # Positive strafe right -> turn left (negative yaw).
+        return -(strafe_speed_ms / orbit_radius_m) * RAD_TO_DEG
+    
+    def dribbler_spin(self, dribbler, orbit_sign, speed, target_yaw, break_beam, kicker=None):
+        dribbler.set_speed(DRIBBLER_SPEED)
+        self._update_yaw()
+        orbit_yaw = self.yaw
+        strafe_dir = 90 * orbit_sign
+        while abs(wrap_angle(target_yaw - self.yaw)) > YAW_CORRECT_THRESHOLD:
+            self._update_yaw()
+            if not break_beam.read():
+                break
+            strafe_speed_ms = self.get_speed_in_direction(strafe_dir)
+            omega_deg = self.get_orbit_yaw_rate_deg(strafe_speed_ms, ORBIT_RADIUS_CM)
+            orbit_yaw = wrap_angle(orbit_yaw + omega_deg * UPDATE_INTERVAL_SECONDS)
+
+            self.move(strafe_dir, speed, orbit_yaw)
+            time.sleep(UPDATE_INTERVAL_SECONDS)
+
+        self.stop()
+        if kicker is not None:
+            dribbler.set_speed(0)
+            kicker.kick()
+
     def _drive_loop(self):
         motors_config = config.get_value("motors")
         while True:
@@ -86,11 +122,9 @@ class Drive:
                 motor.set_speed(motor_speed)
 
     def _get_yaw_correction(self):
-        raw_yaw = self.imu.get_yaw()
-        if raw_yaw is None:
+        if not self._update_yaw():
             return 0
 
-        self.yaw = wrap_angle(self.initial_yaw - raw_yaw)
         with self.target_lock:
             target_rotation = self.target_rotation
             yaw_correct_speed = self.target_yaw_correct_speed
@@ -104,6 +138,14 @@ class Drive:
             -yaw_correct_speed,
             yaw_correct_speed,
         )
+
+    def _update_yaw(self):
+        raw_yaw = self.imu.get_yaw()
+        if raw_yaw is None:
+            return False
+
+        self.yaw = wrap_angle(self.initial_yaw - raw_yaw)
+        return True
 
     def _update_current_velocity(self):
         with self.target_lock:
