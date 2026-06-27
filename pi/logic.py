@@ -30,9 +30,8 @@ class PossessionState(Enum):
     HEADING_TO_GOAL = 0
     READY_TO_SHOOT = 1
 
-    # Hopefully we have time to code these
     BALL_HIDING = 2
-    SPIN_SHOOT = 3
+    SPIN_SHOOT = 3 # Not coded yet
 
 class GoalColour(Enum):
     BLUE = "Blue"
@@ -48,9 +47,6 @@ class Robot():
 
     def on_startup(self):
         """Initialise"""
-        # Load motor config
-        # with open("/home/dsa/Robotics/config.json") as f:
-        #     config = json.load(f)
 
         # ----- SETTINGS ----- #
         # Target Goal
@@ -84,7 +80,7 @@ class Robot():
         self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE = 70 # When gained possession of the ball, if x_coord is > this number, start edge hiding.
         self.CRAB_WALK_DIST_TO_WALL = 40 # Aim to keep this distance from wall when crab walking
         self.CRAB_WALK_ANGLE = 90 # Somewhere inbetween 45 to 135, 135 means it faces more towards own goal
-        self.TRIGGER_BALL_HIDE_WALL_DIST = 70
+        self.TRIGGER_BALL_HIDE_LINE_DIST = 70
 
         ## Ball capture PD control
         self.CAPTURE_WIDTH = 50 # Max lateral distance to decide to move forward (close to cm)
@@ -229,8 +225,6 @@ class Robot():
 
     def update_offence_state(self):
         ball_dir = self.ball_dir if self.ball_dir is not None else self.last_ball_dir
-        ball_dist = self.ball_dist if self.ball_dist is not None else self.last_ball_dist
-        ball_pos_x = ball_dist * math.sin(math.radians(ball_dir))
 
         """Top-level state transitions"""
         if self.state == RobotState.NONE:
@@ -286,7 +280,7 @@ class Robot():
     def execute_defence(self):
         # If ball very close, turn to attack mode
         if self.see_ball and self.ball_dist is not None and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST:
-            self.mode = RobotMode.OFFENCE
+            # self.mode = RobotMode.OFFENCE
             return
 
         # Stay near own goal
@@ -316,7 +310,7 @@ class Robot():
             return
 
         if self.possession_state == PossessionState.NONE:
-            if self.ENABLE_EDGE_BALL_HIDE and min(self.wall_dist(self.to_relative_dir(90)),self.wall_dist(self.to_relative_dir(-90))) < self.TRIGGER_BALL_HIDE_WALL_DIST:
+            if self.ENABLE_EDGE_BALL_HIDE and min(self.wall_dist(self.to_relative_dir(90)),self.wall_dist(self.to_relative_dir(-90))) < self.TRIGGER_BALL_HIDE_LINE_DIST:
                 self.possession_state = PossessionState.BALL_HIDING
             else:
                 self.possession_state = PossessionState.HEADING_TO_GOAL
@@ -357,9 +351,7 @@ class Robot():
                 self.target_yaw = -(self.own_goal_dir + 180) % 360
                 print(self.move_dir)
             else:
-                # TODO: Move towards own goal or centre
-                self.move_dir = 0
-                self.move_spd = 0.1
+                self.try_to_find_centre()
 
         elif self.possession_state == PossessionState.BALL_HIDING:
             # Can normally shoot
@@ -374,7 +366,7 @@ class Robot():
             elif self.goal_dist < self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE:
                 self.target_yaw = self.bot_dir + np.sign(self.goal_dir)
             
-            # Else move toward side wall and goal
+            # Else move toward side wall
             else:
                 field_side = np.sign(self.wall_dist(self.to_relative_dir(-90)) - self.wall_dist(self.to_relative_dir(90))) # right: 1, left: -1
                 wall_error = self.CRAB_WALK_DIST_TO_WALL - self.wall_dist(self.to_absolute_dir(self.CRAB_WALK_ANGLE))
@@ -395,7 +387,7 @@ class Robot():
                 move_y = forward_y + correction_y
 
                 self.move_dir = math.degrees(math.atan2(move_x, move_y))
-                self.move_spd = min(math.sqrt(move_x**2 + move_y**2), 1)
+                self.move_spd = min(math.hypot(move_x, move_y), 1)
                     
 
         elif self.possession_state == PossessionState.SPIN_SHOOT:
@@ -423,8 +415,8 @@ class Robot():
     
     
     def is_ready_to_rebound_shoot(self):
-        # https://www.desmos.com/calculator/ptfizmk1ut
-        print(self.goal_dir, self.goal_dist)
+        # https://www.desmos.com/calculator/xbejygmwek
+
         if (
             self.have_ball
             and self.see_goal
@@ -433,20 +425,35 @@ class Robot():
             and abs(self.wrap_angle(self.bot_dir)) < 180 # Make sure it doesn't own goal
             and self.goal_dist < self.READY_TO_REBOUND_SHOOT_DISTANCE
         ):
-            
-            ratio = self.goal_dist * math.sin(np.radians(180-3*abs(self.bot_dir)-abs(self.goal_dir))) - self.wall_dist(self.bot_dir) * math.sin(np.radians(2*abs(self.bot_dir)))     
-            if abs(ratio) < self.REBOUND_SHOOT_PRECISION:
+            # The three angles of the triangle connecting the robot, goal and the point where the ball would hit the wall
+            theta_1 = abs(self.bot_dir) + abs(self.goal_dir)
+            theta_2 = 2 * abs(90 - abs(self.bot_dir))
+            theta_3 = 180 - theta_1 - theta_2
+
+            value = self.goal_dist * math.sin(math.radians(theta_3)) - self.wall_dist(0) * math.sin(math.radians(theta_2))  
+            if abs(value) < self.REBOUND_SHOOT_PRECISION:
                 return True
         return False
 
-    def wall_dist(relative_angle):
+    def line_dist(self, relative_angle):
         pass
+
+    def line_dir(self, relative_angle):
+        # Please make this output an angle relative to the field
+        pass
+
+    def wall_dist(self, relative_angle):
+        theta = self.line_dir(relative_angle) - self.bot_dir
+        return self.line_dist(relative_angle) + 12 / math.cos(math.radians(theta)) # 12cm is the distance from the centre of the line to the wall
+
+
 
 
     def ball_capture(self):
+
         """Go around ball and try to capture it with dribbler"""
         self.move_spd = self.BASE_BALL_CHASE_SPD
-        # Sorry, a lot of magic numbers here, I cbb making constants for all of them
+        # Sorry, a lot of magic numbers here
         # https://yuta.techblog.jp/archives/40889399.html
 
         if self.see_ball:
@@ -457,7 +464,7 @@ class Robot():
             ball_dist = self.last_ball_dist
 
         # Else if too close to ball, go away from it
-        if ball_dist < 20:
+        if ball_dist < self.BALL_ORBIT_RADIUS:
             distance_ratio = (self.BALL_ORBIT_RADIUS - ball_dist) / self.BALL_ORBIT_RADIUS
             orbit_angle = 90 + distance_ratio * 90
             self.move_dir = ball_dir + np.copysign(orbit_angle, ball_dir)
@@ -466,16 +473,18 @@ class Robot():
         # Else move in an angle that is tangent to a circle centered at the ball
         else:
             if self.BALL_ORBIT_RADIUS / ball_dist > 1:
-                print("arcsin argument is > 1. Adjust BALL_ORBIT_RADIUS")
+                print("arcsin argument is > 1 in ball_capture().") # This should never happen due to the if statement above but just in case something goes wrong
             else:
                 self.move_dir = ball_dir + np.copysign(math.degrees(np.asin(self.BALL_ORBIT_RADIUS / ball_dist)), ball_dir)
             
                 # Test logic to handle moving balls by adjusting movement speed
-                # distance_rate = (self.last_ball_dist - ball_dist) / self.dt if self.dt > 0 else 0
-                # expected_closing_rate = self.move_spd * math.cos(math.radians(abs(self.move_dir - ball_dir)))
+                distance_rate = (self.last_ball_dist - ball_dist) / self.dt if self.dt > 0 else 0
+                expected_closing_rate = self.move_spd * math.cos(math.radians(abs(self.move_dir - ball_dir)))
 
-                # if expected_closing_rate > 10:
-                #     self.move_spd *= 2 - max(0, min(2, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
+                if expected_closing_rate > 10:
+                    self.move_spd *= 2 - max(0.2, min(1.8, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
+        
+
 
     def lining_up(self):
         # print("LINING UP")
@@ -501,11 +510,36 @@ class Robot():
         else:
             self.dribble()
             self.move_dir = 0
-            self.move_spd = 0.4
+            self.move_spd = 0.8
+    
+    def try_to_find_centre(self):
+        # Get distances
+        dist_N = self.line_dist(self.to_absolute_dir(0))
+        dist_E = self.line_dist(self.to_absolute_dir(90))
+        dist_S = self.line_dist(self.to_absolute_dir(-180))
+        dist_W = self.line_dist(self.to_absolute_dir(-90))
+
+        INF = 1e6
+        dist_N = INF if dist_N is None else dist_N
+        dist_E = INF if dist_E is None else dist_E
+        dist_S = INF if dist_S is None else dist_S
+        dist_W = INF if dist_W is None else dist_W
+        eps = 1e-6
+
+        # move away from line
+        wx = (1.0 / (dist_W + eps)) - (1.0 / (dist_E + eps))
+        wy = (1.0 / (dist_S + eps)) - (1.0 / (dist_N + eps))
+
+        # convert to vector
+        mag = math.hypot(wx, wy)
+
+        self.move_dir = math.degrees(math.atan2(wx, wy))
+        self.move_spd = min(1, mag * 40)
 
     # ------ Primitive actions ------ #
 
     def move(self):
+
         self.drive.move(self.move_dir, self.move_spd, self.target_yaw, self.have_ball)
 
     def dribble(self):
