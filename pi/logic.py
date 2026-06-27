@@ -54,6 +54,7 @@ class Robot():
 
         # Role
         self.mode = RobotMode.OFFENCE
+        self.PRIORITY_MODE = RobotMode.DEFENCE
 
         # Constants
         ## General
@@ -81,7 +82,8 @@ class Robot():
         self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE = 70 # When gained possession of the ball, if x_coord is > this number, start edge hiding.
         self.CRAB_WALK_DIST_TO_WALL = 40 # Aim to keep this distance from wall when crab walking
         self.CRAB_WALK_ANGLE = 90 # Somewhere inbetween 45 to 135, 135 means it faces more towards own goal
-        self.TRIGGER_BALL_HIDE_LINE_DIST = 70
+        self.TRIGGER_BALL_HIDE_LINE_DIST = 40
+        self.LINE_AVOID_THRESHOLD = 30  # cm — start filtering out-of-bounds component within this distance
 
         ## Ball capture PD control
         self.CAPTURE_WIDTH = 50 # Max lateral distance to decide to move forward (close to cm)
@@ -192,7 +194,8 @@ class Robot():
 
         self.have_ball = self.break_beam.read()
         self.see_ball = self.ball_dir is not None and self.ball_dist is not None
-        self.see_goal = self.goal_dir is not None
+        self.see_goal = self.goal_dir is not None and self.goal_dist is not None
+        self.see_own_goal = self.own_goal_dir is not None and self.own_goal_dist is not None
 
         if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
@@ -200,7 +203,7 @@ class Robot():
         # State machine
         self.execute_behaviour()
 
-        if USE_COMM_MODULE and comm_module.read():
+        if USE_COMM_MODULE and self.comm_module.read():
             self.drive.stop()
         else:
             # Execute movement
@@ -225,9 +228,10 @@ class Robot():
 
 
     def update_offence_state(self):
+        """Top-level state transitions"""
+
         ball_dir = self.ball_dir if self.ball_dir is not None else self.last_ball_dir
 
-        """Top-level state transitions"""
         if self.state == RobotState.NONE:
             self.state = RobotState.NO_SEE_BALL
 
@@ -311,7 +315,7 @@ class Robot():
             return
 
         if self.possession_state == PossessionState.NONE:
-            if self.ENABLE_EDGE_BALL_HIDE and min(self.line_dist(self.to_relative_dir(90)),self.line_dist(self.to_relative_dir(-90))) < self.TRIGGER_BALL_HIDE_WALL_DIST:
+            if self.ENABLE_EDGE_BALL_HIDE and min(self.line_dist(self.to_relative_dir(90)),self.line_dist(self.to_relative_dir(-90))) < self.TRIGGER_BALL_HIDE_LINE_DIST:
                 self.possession_state = PossessionState.BALL_HIDING
             else:
                 self.possession_state = PossessionState.HEADING_TO_GOAL
@@ -362,7 +366,7 @@ class Robot():
                 self.possession_state = PossessionState.READY_TO_SHOOT
             
             # Close to goal, but no rebound shoot opportunity found
-            elif self.goal_dist < self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE:
+            elif self.goal_dist is not None and self.goal_dist < self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE:
                 self.target_yaw = self.bot_dir + np.sign(self.goal_dir)
             
             # Else move toward side wall
@@ -412,7 +416,6 @@ class Robot():
             # and self.goal_dist < self.READY_TO_SHOOT_DISTANCE
         )
     
-    
     def is_ready_to_rebound_shoot(self):
         # https://www.desmos.com/calculator/xbejygmwek
 
@@ -421,7 +424,7 @@ class Robot():
             and self.see_goal
             and self.goal_dir is not None
             and self.goal_dist is not None
-            and abs(self.wrap_angle(self.bot_dir)) < 180 # Make sure it doesn't own goal
+            and abs(self.wrap_angle(self.bot_dir)) < 90 # Make sure it doesn't own goal
             and self.goal_dist < self.READY_TO_REBOUND_SHOOT_DISTANCE
         ):
             # The three angles of the triangle connecting the robot, goal and the point where the ball would hit the wall
@@ -444,19 +447,6 @@ class Robot():
     def wall_dist(self, relative_angle):
         theta = self.line_dir(relative_angle) - self.bot_dir
         return self.line_dist(relative_angle) + 12 / math.cos(math.radians(theta)) # 12cm is the distance from the centre of the line to the wall
-
-
-
-    def line_dir(self, relative_angle):
-        # Please make this output an angle relative to the field
-        pass
-
-    def wall_dist(self, relative_angle):
-        theta = self.line_dir(relative_angle) - self.bot_dir
-        return self.line_dist(relative_angle) + 12 / math.cos(math.radians(theta)) # 12cm is the distance from the centre of the line to the wall
-
-
-
 
     def ball_capture(self):
 
@@ -509,7 +499,7 @@ class Robot():
             self.last_ball_x_error = error_x
 
             move_vel_x = (error_x * self.CAPTURE_KP) + (derivative_x * self.CAPTURE_KD) # PD
-            move_vel_y = (math.sqrt(self.CAPTURE_WIDTH) - math.sqrt(abs(ball_pos_x))) / math.sqrt(self.CAPTURE_WIDTH) * self.BASE_BALL_CHASE_SPD # Moves forward fast the more centered it is
+            move_vel_y = max(0, (math.sqrt(self.CAPTURE_WIDTH) - math.sqrt(abs(ball_pos_x))) / math.sqrt(self.CAPTURE_WIDTH) * self.BASE_BALL_CHASE_SPD) # Moves forward fast the more centered it is
 
             self.move_dir = math.degrees(math.atan2(move_vel_x, move_vel_y)) # Calculate direction of movement vector
             self.move_spd = math.sqrt(move_vel_x**2 + move_vel_y**2) # Calculate magnitude of movement vector
@@ -545,11 +535,46 @@ class Robot():
         self.move_dir = math.degrees(math.atan2(wx, wy))
         self.move_spd = min(1, mag * 40)
 
-    # ------ Primitive actions ------ #
+    # ------ Action Functions ------ #
 
     def move(self):
+        move_dir, move_spd = self.avoid_line(self.move_dir, self.move_spd)
+        self.drive.move(move_dir, move_spd, self.target_yaw, self.have_ball)
+    
+    def avoid_line(self, move_dir, move_spd):
+        """
+        If the bot is within LINE_AVOID_THRESHOLD of a line, remove the velocity
+        component perpendicular to the line and keep the parallel component
+        """
 
-        self.drive.move(self.move_dir, self.move_spd, self.target_yaw, self.have_ball)
+        if self.line_dist is None or self.line_dir is None:
+            return move_dir, move_spd
+        if self.line_dist >= self.LINE_AVOID_THRESHOLD:
+            return move_dir, move_spd
+
+        # Unit vector pointing toward the line (perpendicular-to-line axis)
+        line_rad = math.radians(self.to_relative_dir(self.line_dir))
+        toward_line_x = math.sin(line_rad)
+        toward_line_y = math.cos(line_rad)
+
+        # Decompose the intended movement vector into x and y
+        move_rad = math.radians(move_dir)
+        vx = move_spd * math.sin(move_rad)
+        vy = move_spd * math.cos(move_rad)
+
+        # Project movement onto the toward-line axis
+        dot = vx * toward_line_x + vy * toward_line_y
+
+        # Only suppress the component if it's moving toward the line (dot > 0)
+        if dot > 0:
+            vx -= dot * toward_line_x
+            vy -= dot * toward_line_y
+
+        new_spd = math.hypot(vx, vy)
+        if new_spd < 1e-6:
+            return move_dir, 0.0  # Fully blocked, keep dir but zero speed
+        new_dir = math.degrees(math.atan2(vx, vy))
+        return new_dir, new_spd
 
     def dribble(self):
         self.dribbler.set_speed(self.DRIBBLER_ROT_SPD)
@@ -560,7 +585,7 @@ class Robot():
     def kick(self):
         self.kicker.kick()
 
-    # ------ Misc functions ------ #
+    # ------ Utility Functions ------ #
 
     def to_absolute_dir(self, relative_dir):
         """Input a direction relative to the bot orientation\nReturns a direction that ignores bot orientation"""
@@ -582,6 +607,7 @@ class Robot():
             return None
         return (theta + 180) % 360 - 180
 
+
     def print_state(self):
         """Print current state for debugging"""
         ball_dir = f"{self.ball_dir:.1f}°" if self.ball_dir is not None else "None"
@@ -590,9 +616,6 @@ class Robot():
         print(f"Mode: {self.mode.name} | State: {self.state.name} | Possession: {self.possession_state.name} | "
               f"Ball: {self.see_ball} (dir={ball_dir}, dist={ball_dist}) | "
               f"Goal: {self.see_goal} (dir={goal_dir})")
-
-
-
 
 if __name__ == "__main__":
     bot1 = Robot()
