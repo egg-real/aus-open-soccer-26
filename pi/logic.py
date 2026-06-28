@@ -52,7 +52,7 @@ class Robot():
         self.target_goal = GoalColour.YELLOW
 
         # Role
-        self.mode = RobotMode.OFFENCE
+        self.mode = RobotMode.DEFENCE
         self.PRIORITY_MODE = RobotMode.DEFENCE
 
         # Constants
@@ -106,6 +106,7 @@ class Robot():
         self.have_ball = False
         self.see_goal = False
         self.see_own_goal = False
+        self.avoiding_line = False
 
         # Initialize Hardware Interfaces
         self.drive = Drive()
@@ -143,9 +144,9 @@ class Robot():
         self.goal_dir = 0
         self.own_goal_dir = 180
 
-        ## Line
-        self.line_dir = None
-        self.line_dist = None
+        ## Line (nearest detected line from camera)
+        self.nearest_line_dir = None
+        self.nearest_line_dist = None
 
         ## Bot Communication
         self.other_bot_have_ball = False
@@ -169,8 +170,8 @@ class Robot():
 
         self.ball_dir = self.wrap_angle(self.cameras.get_ball_dir())
         self.ball_dist = self.cameras.get_ball_dist()
-        self.line_dir = self.wrap_angle(self.cameras.get_line_dir())
-        self.line_dist = self.cameras.get_line_dist()
+        self.nearest_line_dir = self.wrap_angle(self.cameras.get_line_dir())
+        self.nearest_line_dist = self.cameras.get_line_dist()
 
         if self.target_goal == GoalColour.BLUE:
             self.goal_dir = self.wrap_angle(self.cameras.get_blue_goal_dir())
@@ -248,7 +249,7 @@ class Robot():
             elif self.have_ball:  # Break beam triggered (gained possession without camera seeing)
                 self.state = RobotState.HAVE_BALL
             elif self.see_goal or self.see_own_goal:
-                self.state == RobotState.NO_SEE_BALL
+                self.state = RobotState.NO_SEE_BALL
             else:
                 self.try_to_find_centre()
 
@@ -366,7 +367,6 @@ class Robot():
                 self.move_dir = -(self.own_goal_dir + 180) % 360
                 self.move_spd = self.HEAD_TO_GOAL_SPD
                 self.target_yaw = -(self.own_goal_dir + 180) % 360
-                print(self.move_dir)
             else:
                 self.try_to_find_centre()
 
@@ -451,12 +451,24 @@ class Robot():
                 return True
         return False
 
-    def line_dist(self, relative_angle):
-        pass
+    def line_dist(self, field_angle):
+        """Estimate distance (cm) to the nearest line along a field-absolute bearing."""
+        if self.nearest_line_dist is None or self.nearest_line_dir is None:
+            return None
+        line_bearing = self.wrap_angle(self.nearest_line_dir + self.bot_dir)
+        theta = self.wrap_angle(field_angle - line_bearing)
+        cos_theta = math.cos(math.radians(theta))
+        if abs(cos_theta) < 0.05:
+            return None
+        dist = self.nearest_line_dist / cos_theta
+        return dist if dist > 0 else None
 
-    def line_dir(self, relative_angle):
-        # Please make this output an angle relative to the field
-        pass
+    def line_dir(self, field_angle):
+        """Orientation of the nearest line in field-absolute degrees."""
+        if self.nearest_line_dist is None or self.nearest_line_dir is None:
+            return None
+        line_bearing = self.wrap_angle(self.nearest_line_dir + self.bot_dir)
+        return self.wrap_angle(line_bearing + 90)
 
     def wall_dist(self, relative_angle):
         theta = self.line_dir(relative_angle) - self.bot_dir
@@ -495,9 +507,10 @@ class Robot():
                 expected_closing_rate = self.move_spd * math.cos(math.radians(abs(self.move_dir - ball_dir)))
 
                 if expected_closing_rate > 10:
-                    self.move_spd *= 2 - max(0.2, min(1.8, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
+                    self.move_spd *= 2 - max(0.5, min(1.5, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
         
-
+        if self.avoiding_line and self.ball_dir is not None:
+            self.target_yaw = self.ball_dir
 
     def lining_up(self):
         # print("LINING UP")
@@ -561,13 +574,16 @@ class Robot():
         component perpendicular to the line and keep the parallel component
         """
 
-        if self.line_dist is None or self.line_dir is None:
+        self.avoiding_line = False
+        if self.line_dist(move_dir) is None or self.line_dir(move_dir) is None:
             return move_dir, move_spd
-        if self.line_dist >= self.LINE_AVOID_THRESHOLD:
+        if self.line_dist(move_dir) >= self.LINE_AVOID_THRESHOLD:
             return move_dir, move_spd
+        
+        self.avoiding_line = True
 
         # Unit vector pointing toward the line (perpendicular-to-line axis)
-        line_rad = math.radians(self.to_relative_dir(self.line_dir))
+        line_rad = math.radians(self.to_relative_dir(self.nearest_line_dir))
         toward_line_x = math.sin(line_rad)
         toward_line_y = math.cos(line_rad)
 
