@@ -106,6 +106,7 @@ class Robot():
         self.have_ball = False
         self.see_goal = False
         self.see_own_goal = False
+        self.avoiding_line = False
 
         # Initialize Hardware Interfaces
         self.drive = Drive()
@@ -495,9 +496,10 @@ class Robot():
                 expected_closing_rate = self.move_spd * math.cos(math.radians(abs(self.move_dir - ball_dir)))
 
                 if expected_closing_rate > 10:
-                    self.move_spd *= 2 - max(0.2, min(1.8, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
+                    self.move_spd *= 2 - max(0.5, min(1.5, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
         
-
+        if self.avoiding_line and self.ball_dir is not None:
+            self.target_yaw = self.ball_dir
 
     def lining_up(self):
         # print("LINING UP")
@@ -561,10 +563,13 @@ class Robot():
         component perpendicular to the line and keep the parallel component
         """
 
-        if self.line_dist is None or self.line_dir is None:
+        self.avoiding_line = False
+        if self.line_dist(move_dir) is None or self.line_dir(move_dir) is None:
             return move_dir, move_spd
-        if self.line_dist >= self.LINE_AVOID_THRESHOLD:
+        if self.line_dist(move_dir) >= self.LINE_AVOID_THRESHOLD:
             return move_dir, move_spd
+        
+        self.avoiding_line = True
 
         # Unit vector pointing toward the line (perpendicular-to-line axis)
         line_rad = math.radians(self.to_relative_dir(self.line_dir))
