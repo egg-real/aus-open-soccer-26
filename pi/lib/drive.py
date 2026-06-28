@@ -13,9 +13,9 @@ POSSESSION_YAW_CORRECT_SPEED = 0.3
 YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle yaw correction will be at the maximum speed.
 
 # Dribbler Spin Constants
-DRIBBLER_SPEED = 1.0
+DRIBBLER_SPEED = -1.0
+DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD = 5.0
 ORBIT_RADIUS_CM = 9.0  # distance from bot centre to ball
-UPDATE_INTERVAL_SECONDS = 0.02
 RAD_TO_DEG = 180.0 / math.pi
 
 def clamp(value, minimum, maximum):
@@ -92,7 +92,7 @@ class Drive:
         self._update_yaw()
         orbit_yaw = self.yaw
         strafe_dir = 90 * orbit_sign
-        while abs(wrap_angle(target_yaw - self.yaw)) > YAW_CORRECT_THRESHOLD:
+        while abs(wrap_angle(target_yaw - self.yaw)) > DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD:
             self._update_yaw()
             if not break_beam.read():
                 break
@@ -101,10 +101,8 @@ class Drive:
             orbit_yaw = wrap_angle(orbit_yaw + omega_deg * UPDATE_INTERVAL_SECONDS)
 
             self.move(strafe_dir, speed, orbit_yaw)
-            time.sleep(UPDATE_INTERVAL_SECONDS)
 
-        self.stop()
-        if kicker is not None:
+        if abs(wrap_angle(target_yaw - self.yaw)) > DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD and kicker is not None:
             dribbler.set_speed(0)
             kicker.kick()
 
