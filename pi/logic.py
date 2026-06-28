@@ -24,14 +24,13 @@ class RobotState(Enum):
     CHASING_BALL = 1
     HAVE_BALL = 2
     LINING_UP = 3
+    CLUELESS = 4
 
 class PossessionState(Enum):
     NONE = -1
     HEADING_TO_GOAL = 0
-    READY_TO_SHOOT = 1
-
-    BALL_HIDING = 2
-    SPIN_SHOOT = 3 # Not coded yet
+    BALL_HIDING = 1
+    SPIN_SHOOT = 2 # Not coded yet
 
 class GoalColour(Enum):
     BLUE = "Blue"
@@ -83,7 +82,7 @@ class Robot():
         self.CRAB_WALK_DIST_TO_WALL = 40 # Aim to keep this distance from wall when crab walking
         self.CRAB_WALK_ANGLE = 90 # Somewhere inbetween 45 to 135, 135 means it faces more towards own goal
         self.TRIGGER_BALL_HIDE_LINE_DIST = 40
-        self.LINE_AVOID_THRESHOLD = 30  # cm — start filtering out-of-bounds component within this distance
+        self.LINE_AVOID_THRESHOLD = 30  # close to cm, start filtering out-of-bounds component within this distance
 
         ## Ball capture PD control
         self.CAPTURE_WIDTH = 50 # Max lateral distance to decide to move forward (close to cm)
@@ -240,6 +239,19 @@ class Robot():
                 self.state = RobotState.CHASING_BALL
             elif self.have_ball:  # Break beam triggered (gained possession without camera seeing)
                 self.state = RobotState.HAVE_BALL
+            elif not self.see_goal and not self.see_own_goal:
+                self.state = RobotState.CLUELESS
+        
+        elif self.state == RobotState.CLUELESS:
+            if self.see_ball:  # Found ball via camera
+                self.state = RobotState.CHASING_BALL
+            elif self.have_ball:  # Break beam triggered (gained possession without camera seeing)
+                self.state = RobotState.HAVE_BALL
+            elif self.see_goal or self.see_own_goal:
+                self.state == RobotState.NO_SEE_BALL
+            else:
+                self.try_to_find_centre()
+
         elif self.state == RobotState.CHASING_BALL:
             if (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:  # Lost sight of ball for some time
                 self.state = RobotState.NO_SEE_BALL
@@ -248,6 +260,7 @@ class Robot():
                 self.state = RobotState.HAVE_BALL
             elif (-30 <= ball_dir <= 30):
                 self.state = RobotState.LINING_UP
+                
         elif self.state == RobotState.LINING_UP:
             if (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:
                 self.state = RobotState.NO_SEE_BALL
@@ -315,29 +328,25 @@ class Robot():
             return
 
         if self.possession_state == PossessionState.NONE:
-            if self.ENABLE_EDGE_BALL_HIDE and min(self.line_dist(self.to_relative_dir(90)),self.line_dist(self.to_relative_dir(-90))) < self.TRIGGER_BALL_HIDE_LINE_DIST:
+            line_dist_E = self.line_dist(self.to_relative_dir(90))
+            line_dist_W = self.line_dist(self.to_relative_dir(-90))
+            if (self.ENABLE_EDGE_BALL_HIDE
+                and line_dist_E is not None
+                and line_dist_W is not None
+                and min(line_dist_E, line_dist_W) < self.TRIGGER_BALL_HIDE_LINE_DIST):
                 self.possession_state = PossessionState.BALL_HIDING
             else:
                 self.possession_state = PossessionState.HEADING_TO_GOAL
             return
 
         if self.possession_state == PossessionState.HEADING_TO_GOAL:
-            if self.is_ready_to_shoot():
-                self.possession_state = PossessionState.READY_TO_SHOOT
             return
 
         if self.possession_state == PossessionState.BALL_HIDING:
-            if self.is_ready_to_shoot():
-                self.possession_state = PossessionState.READY_TO_SHOOT
             return
 
         if self.possession_state == PossessionState.SPIN_SHOOT:
             print("No code for this yet, please set ENABLE_FLICK_SHOT to False")
-            return
-
-        if self.possession_state == PossessionState.READY_TO_SHOOT:
-            if not self.is_ready_to_shoot():
-                self.possession_state = PossessionState.HEADING_TO_GOAL
             return
 
 
@@ -346,6 +355,11 @@ class Robot():
         self.dribble()  # Keep dribbler running
 
         if self.possession_state == PossessionState.HEADING_TO_GOAL:
+            if self.is_ready_to_shoot():
+                self.stop_dribbler()
+                self.kick()
+                self.possession_state = PossessionState.NONE
+                return
             if self.see_goal and self.goal_dir is not None:
                 self.drive.dribbler_spin(self.dribbler, math.copysign(1, self.goal_dir), self.SPIN_SHOT_SPEED, self.goal_dir, self.break_beam, self.kicker)
             elif self.see_own_goal and self.own_goal_dir is not None:
@@ -359,11 +373,17 @@ class Robot():
         elif self.possession_state == PossessionState.BALL_HIDING:
             # Can normally shoot
             if self.is_ready_to_shoot():
-                self.possession_state = PossessionState.READY_TO_SHOOT
+                self.stop_dribbler()
+                self.kick()
+                self.possession_state = PossessionState.NONE
+                return
             
             # Can rebound shoot
             elif self.ENABLE_REBOUND_SHOT and self.is_ready_to_rebound_shoot():
-                self.possession_state = PossessionState.READY_TO_SHOOT
+                self.stop_dribbler()
+                self.kick()
+                self.possession_state = PossessionState.NONE
+                return
             
             # Close to goal, but no rebound shoot opportunity found
             elif self.goal_dist is not None and self.goal_dist < self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE:
@@ -397,12 +417,6 @@ class Robot():
             print("No code for this yet, please set ENABLE_FLICK_SHOT to False")
             self.move_dir = 0
             self.move_spd = 0
-
-        elif self.possession_state == PossessionState.READY_TO_SHOOT:
-            self.move_dir = 0
-            self.move_spd = 0
-            self.stop_dribbler()
-            self.kick()
 
 
     def is_ready_to_shoot(self):
