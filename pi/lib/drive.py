@@ -102,9 +102,7 @@ class Drive:
                 possession = self.possession
                 target_rotation = self.target_rotation
 
-            if (possession
-                    and self._update_yaw()
-                    and abs(wrap_angle(target_rotation - self.yaw)) > DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD):
+            if (possession and abs(wrap_angle(target_rotation - self.yaw)) > DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD):
                 # Orbit the ball to reach target_rotation instead of rotating in place,
                 # so the ball stays pinned against the dribbler.
                 drive_direction, drive_speed, yaw_correction = self._orbit_step(target_rotation)
