@@ -2,7 +2,7 @@ import time
 
 import serial
 
-from camera import CMD_DETECT, CMD_FRAME_MARKER, CMD_STOP, DEFAULT_CAMERA_PORTS
+from lib.camera import CMD_DETECT, CMD_FRAME_MARKER, CMD_STOP, DEFAULT_CAMERA_PORTS
 
 
 PORTS = list(DEFAULT_CAMERA_PORTS)

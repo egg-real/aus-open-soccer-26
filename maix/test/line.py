@@ -1,10 +1,10 @@
 from maix import camera, display, image, time
 
-cam = camera.Camera(320, 240, image.Format.FMT_GRAYSCALE)
+cam = camera.Camera(320, 240)
 disp = display.Display()
 
 # thresholds = [[0, 80, 40, 80, 10, 80]] # red
-thresholds = [[80, 100]] # green
+thresholds = [[90, 100, -10, 10, -10, 10]] # green
 # thresholds = [[0, 80, 30, 100, -120, -60]] # blue
 
 while 1:

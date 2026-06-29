@@ -8,7 +8,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from camera import Cameras
+from lib.camera import Cameras
 
 
 BOUNDARY = "frame"

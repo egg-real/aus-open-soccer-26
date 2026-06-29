@@ -6,7 +6,7 @@ Pulse GPIO 26 high for 0.1 s, then low (e.g. solenoid kick test on Raspberry Pi)
 import board
 import time
 
-from kicker import Kicker
+from lib.kicker import Kicker
 
 SOLENOID_PIN = board.D26
 PULSE_S = 0.1

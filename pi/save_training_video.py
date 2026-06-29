@@ -10,7 +10,7 @@ import argparse
 import time
 from pathlib import Path
 
-from camera import Cameras
+from lib.camera import Cameras
 
 
 def parse_args():

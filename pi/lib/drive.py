@@ -16,6 +16,7 @@ YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle y
 DRIBBLER_SPEED = -1.0
 DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD = 5.0
 ORBIT_RADIUS_CM = 9.0  # distance from bot centre to ball
+ORBIT_STRAFE_SPEED = 0.4  # strafe speed used while orbiting the ball in possession
 RAD_TO_DEG = 180.0 / math.pi
 
 def clamp(value, minimum, maximum):
@@ -51,6 +52,10 @@ class Drive:
         self.target_speed = 0
         self.target_rotation = 0
         self.target_yaw_correct_speed = YAW_CORRECT_SPEED
+        self.possession = False
+        self.orbiting = False
+        self.orbit_yaw = 0.0
+        self.last_orbit_time = time.monotonic()
         self.target_lock = threading.Lock()
         self.last_update_time = time.monotonic()
         self.imu = IMU()
@@ -73,6 +78,7 @@ class Drive:
             self.target_direction = angle
             self.target_speed = speed
             self.target_rotation = wrap_angle(rotation)
+            self.possession = possession
             if possession:
                 self.target_yaw_correct_speed = POSSESSION_YAW_CORRECT_SPEED
             else:
@@ -87,37 +93,71 @@ class Drive:
         # Positive strafe right -> turn left (negative yaw).
         return -(strafe_speed_ms / orbit_radius_m) * RAD_TO_DEG
     
-    def dribbler_spin(self, dribbler, orbit_sign, speed, target_yaw, break_beam, kicker=None):
-        dribbler.set_speed(DRIBBLER_SPEED)
-        self._update_yaw()
-        orbit_yaw = self.yaw
-        strafe_dir = 90 * orbit_sign
-        while abs(wrap_angle(target_yaw - self.yaw)) > DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD:
-            self._update_yaw()
-            if not break_beam.read():
-                break
-            strafe_speed_ms = self.get_speed_in_direction(strafe_dir)
-            omega_deg = self.get_orbit_yaw_rate_deg(strafe_speed_ms, ORBIT_RADIUS_CM)
-            orbit_yaw = wrap_angle(orbit_yaw + omega_deg * UPDATE_INTERVAL_SECONDS)
-
-            self.move(strafe_dir, speed, orbit_yaw)
-
-        if abs(wrap_angle(target_yaw - self.yaw)) > DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD and kicker is not None:
-            dribbler.set_speed(0)
-            kicker.kick()
-
     def _drive_loop(self):
         motors_config = config.get_value("motors")
         while True:
             self._update_current_velocity()
-            yaw_correction = self._get_yaw_correction()
+
+            with self.target_lock:
+                possession = self.possession
+                target_rotation = self.target_rotation
+
+            if (possession
+                    and self._update_yaw()
+                    and abs(wrap_angle(target_rotation - self.yaw)) > DRIBBLER_SPIN_YAW_CORRECT_THRESHOLD):
+                # Orbit the ball to reach target_rotation instead of rotating in place,
+                # so the ball stays pinned against the dribbler.
+                drive_direction, drive_speed, yaw_correction = self._orbit_step(target_rotation)
+            else:
+                self.orbiting = False
+                drive_direction = self.current_direction
+                drive_speed = self.current_speed
+                yaw_correction = self._get_yaw_correction()
 
             for motor_direction, motor in self.motors.items():
                 motor_config = motors_config.get(motor_direction)
-                motor_angle = self.current_direction - motor_config["angle_off"]
-                motor_speed = self.current_speed * -sin(radians(motor_angle))
+                motor_angle = drive_direction - motor_config["angle_off"]
+                motor_speed = drive_speed * -sin(radians(motor_angle))
                 motor_speed = clamp(motor_speed - yaw_correction, -1.0, 1.0)
                 motor.set_speed(motor_speed)
+
+    def _orbit_step(self, target_rotation):
+        """Single non-blocking orbit iteration.
+
+        Strafes sideways while rotating in a coordinated way so the bot circles
+        the held ball toward target_rotation. Returns (drive_direction,
+        drive_speed, yaw_correction) for the drive loop to apply.
+        """
+        yaw_error = wrap_angle(target_rotation - self.yaw)
+
+        now = time.monotonic()
+        if not self.orbiting:
+            self.orbiting = True
+            self.orbit_yaw = self.yaw
+            self.last_orbit_time = now
+        dt = now - self.last_orbit_time
+        self.last_orbit_time = now
+
+        # Strafe toward the side that rotates the bot toward target_rotation.
+        # Strafing right (+90) drives yaw negative (see get_orbit_yaw_rate_deg),
+        # so a positive yaw error (needs yaw to increase) requires strafing left.
+        orbit_sign = -1 if yaw_error >= 0 else 1
+        strafe_dir = 90 * orbit_sign
+
+        # Measure strafe speed along a fixed reference (+90, right) so the omega
+        # sign is consistent for either orbit direction.
+        strafe_speed_ms = self.get_speed_in_direction(90)
+        omega_deg = self.get_orbit_yaw_rate_deg(strafe_speed_ms, ORBIT_RADIUS_CM)
+        self.orbit_yaw = wrap_angle(self.orbit_yaw + omega_deg * dt)
+
+        orbit_yaw_error = wrap_angle(self.orbit_yaw - self.yaw)
+        yaw_correction = clamp(
+            (orbit_yaw_error / YAW_CORRECT_MAX_SPEED_THRESHOLD) * YAW_CORRECT_SPEED,
+            -YAW_CORRECT_SPEED,
+            YAW_CORRECT_SPEED,
+        )
+
+        return strafe_dir, ORBIT_STRAFE_SPEED, yaw_correction
 
     def _get_yaw_correction(self):
         if not self._update_yaw():

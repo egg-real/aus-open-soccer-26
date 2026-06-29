@@ -3,7 +3,7 @@ import time
 
 import board
 
-from kicker import Kicker
+from lib.kicker import Kicker
 from lib.dribbler import Dribbler
 from lib.drive import Drive, wrap_angle
 

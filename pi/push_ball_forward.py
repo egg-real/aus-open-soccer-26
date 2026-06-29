@@ -1,5 +1,5 @@
 import math
-from camera import Cameras
+from lib.camera import Cameras
 from lib.drive import Drive
 
 cams = Cameras()

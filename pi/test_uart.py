@@ -1,6 +1,6 @@
 import serial
 
-from camera import CMD_DETECT, CMD_FRAME_MARKER, CMD_STOP
+from lib.camera import CMD_DETECT, CMD_FRAME_MARKER, CMD_STOP
 
 
 PORT = "/dev/ttyAMA0"

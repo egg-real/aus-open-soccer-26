@@ -5,7 +5,7 @@ from math import sin, cos, pi, copysign
 # ---- Pi -> Maix control protocol ----
 # The pi sends [CMD_FRAME_MARKER, command]. Debug adds a quality byte:
 # [CMD_FRAME_MARKER, CMD_DEBUG, quality].
-# Keep these values in sync with pi/camera.py.
+# Keep these values in sync with pi/lib/camera.py.
 CMD_FRAME_MARKER = 0xAA
 CMD_STOP = 0x00     # stop streaming, go idle
 CMD_DETECT = 0x01   # stream detection packets (the existing behaviour)
@@ -17,7 +17,7 @@ UART_IMAGE_CHUNK_BYTES = 512
 # ---- Maix -> Pi image framing ----
 # An image frame is: IMG_MAGIC + 4-byte big-endian length + JPEG payload.
 # This magic is chosen so it doesn't clash with the 0xff-delimited
-# detection packets. Keep in sync with pi/camera.py.
+# detection packets. Keep in sync with pi/lib/camera.py.
 IMG_MAGIC = b"\xab\xcd\xef\x01"
 JPEG_SOI = b"\xff\xd8"
 JPEG_EOI = b"\xff\xd9"
@@ -168,20 +168,17 @@ class UART():
     
     def send_packet(self, see_ball:bool=False, ball_dir:int=0, ball_dist:int=0,
                     see_goal:bool=False, yellow_goal:bool=False, goal_dir:int=0, goal_dist:int=0,
-                    see_line:bool=False, line_dir:int=0, line_dist:int=0,
                     cam_ok:bool=True):
 
-        info_byte = (0x10 * see_line + 0x08 * see_ball + 0x04 * see_goal
+        info_byte = (0x08 * see_ball + 0x04 * see_goal
                      + 0x02 * yellow_goal + 0x01 * cam_ok)
 
-        packet = ((0xff << 56)
-                    | (info_byte << 48)
-                    | (self._packsigned(ball_dir) << 40)
-                    | (self._packunsigned(ball_dist) << 32)
-                    | (self._packsigned(goal_dir) << 24)
-                    | (self._packunsigned(goal_dist) << 16)
-                    | (self._packsigned(line_dir) << 8)
-                    | (self._packunsigned(line_dist))
+        packet = ((0xff << 40)
+                    | (info_byte << 32)
+                    | (self._packsigned(ball_dir) << 24)
+                    | (self._packunsigned(ball_dist) << 16)
+                    | (self._packsigned(goal_dir) << 8)
+                    | (self._packunsigned(goal_dist))
                    )
 
-        self._write(packet.to_bytes(8, "big"))
+        self._write(packet.to_bytes(6, "big"))

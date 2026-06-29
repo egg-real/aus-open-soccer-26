@@ -1,4 +1,4 @@
-from camera import Cameras
+from lib.camera import Cameras
 
 cams = Cameras()
 cams.start_streaming()

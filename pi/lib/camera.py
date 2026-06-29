@@ -59,8 +59,6 @@ class Cameras():
         self.yellow_goal_dist = None
         self.blue_goal_dir = None
         self.blue_goal_dist = None
-        self.line_dir = None
-        self.line_dist = None
 
         self._lock = threading.Lock()
         self._data = [None] * len(ports)
@@ -195,12 +193,6 @@ class Cameras():
 
     def get_blue_goal_dist(self):
         return self.blue_goal_dist
-
-    def get_line_dir(self):
-        return self.line_dir
-
-    def get_line_dist(self):
-        return self.line_dist
 
     @staticmethod
     def _unpacksigned(byte:int):
@@ -390,13 +382,6 @@ class Cameras():
         goal_yellow
             bool: if the goal is yellow or not (False = blue)
 
-        see_line
-            bool: whether a white field line was detected
-        line_dir
-            int: angle to the closest point on the closest line, relative to centre
-        line_dist
-            int: approx distance to the closest line in cm
-
         cam_ok
             bool: if the camera is running ok (False may suggest some camera error that needs to be addressed)
         """
@@ -404,7 +389,6 @@ class Cameras():
         see_yellow = block[0] & 0x02 > 0
         see_goal = block[0] & 0x04 > 0
         see_ball = block[0] & 0x08 > 0
-        see_line = block[0] & 0x10 > 0
 
         ball_dir = Cameras._unpacksigned(block[1])
         ball_dist = block[2]
@@ -412,11 +396,8 @@ class Cameras():
         goal_dir = Cameras._unpacksigned(block[3])
         goal_dist = block[4]
 
-        line_dir = Cameras._unpacksigned(block[5])
-        line_dist = block[6]
-
-        return (see_ball, see_goal, see_yellow, see_line, cam_ok,
-                ball_dir, ball_dist, goal_dir, goal_dist, line_dir, line_dist)
+        return (see_ball, see_goal, see_yellow, cam_ok,
+                ball_dir, ball_dist, goal_dir, goal_dist)
 
     def process(self):
 
@@ -433,24 +414,16 @@ class Cameras():
         ball_spotted = False
         yellow_goal_spotted = False
         blue_goal_spotted = False
-        line_spotted = False
 
         for i in range(len(data)):
-            if data[i] is None or len(data[i]) < 7:
+            if data[i] is None or len(data[i]) < 5:
                 continue
             block = data[i]
-            (see_ball, see_goal, see_yellow, see_line, cam_ok,
-             ball_dir, ball_dist, goal_dir, goal_dist, line_dir, line_dist) = self._process_block(block)
+            (see_ball, see_goal, see_yellow, cam_ok,
+             ball_dir, ball_dist, goal_dir, goal_dist) = self._process_block(block)
             if not cam_ok:
                 print(f"CAMERA {i} NOT OK")
                 continue
-            if see_line:
-                # Keep the nearest line across all cameras; rotate its bearing
-                # into the bot frame by the camera's mounting offset.
-                if not line_spotted or line_dist < self.line_dist:
-                    self.line_dir = line_dir + i * 90
-                    self.line_dist = line_dist
-                    line_spotted = True
             if see_ball:
                 # If multiple cameras see the ball, trust the closest reading.
                 if not ball_spotted or ball_dist < self.ball_dist:
@@ -479,6 +452,3 @@ class Cameras():
         if not blue_goal_spotted:
             self.blue_goal_dir = None
             self.blue_goal_dist = None
-        if not line_spotted:
-            self.line_dir = None
-            self.line_dist = None

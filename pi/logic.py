@@ -4,11 +4,11 @@ import time
 from enum import Enum
 from lib.dribbler import Dribbler
 from lib.drive import Drive
-from camera import Cameras
+from lib.camera import Cameras
 from lib.break_beam import BreakBeam
 import board
 
-from kicker import Kicker
+from lib.kicker import Kicker
 from lib.comm_module import CommModule
 
 USE_COMM_MODULE = False
@@ -52,8 +52,8 @@ class Robot():
         self.target_goal = GoalColour.YELLOW
 
         # Role
-        self.mode = RobotMode.DEFENCE
-        self.PRIORITY_MODE = RobotMode.DEFENCE
+        self.PRIORITY_MODE = RobotMode.OFFENCE
+        self.mode = self.PRIORITY_MODE
 
         # Constants
         ## General
@@ -70,6 +70,8 @@ class Robot():
         self.READY_TO_REBOUND_SHOOT_ANGLE = 15
         self.READY_TO_REBOUND_SHOOT_DISTANCE = 50
         self.REBOUND_SHOOT_PRECISION = 0.5 # Somewhere inbetween 0 and 2, lower the more precise
+
+        self.GOALIE_MAX_ANGLE_FROM_GOAL = 15
 
         self.DRIBBLER_ROT_SPD = -1.0
         self.POSSESSION_ROT_SPD = 0.1
@@ -170,8 +172,8 @@ class Robot():
 
         self.ball_dir = self.wrap_angle(self.cameras.get_ball_dir())
         self.ball_dist = self.cameras.get_ball_dist()
-        self.nearest_line_dir = self.wrap_angle(self.cameras.get_line_dir())
-        self.nearest_line_dist = self.cameras.get_line_dist()
+        self.nearest_line_dir = None
+        self.nearest_line_dist = None
 
         if self.target_goal == GoalColour.BLUE:
             self.goal_dir = self.wrap_angle(self.cameras.get_blue_goal_dir())
@@ -256,7 +258,7 @@ class Robot():
         elif self.state == RobotState.CHASING_BALL:
             if (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:  # Lost sight of ball for some time
                 self.state = RobotState.NO_SEE_BALL
-                # self.mode = RobotMode.DEFENCE
+                self.mode = self.PRIORITY_MODE
             elif self.have_ball:  # Captured ball
                 self.state = RobotState.HAVE_BALL
             elif (-30 <= ball_dir <= 30):
@@ -265,7 +267,7 @@ class Robot():
         elif self.state == RobotState.LINING_UP:
             if (time.monotonic() - self.last_ball_see_time) > self.GIVE_UP_CHASING_BALL_TIME:
                 self.state = RobotState.NO_SEE_BALL
-                # self.mode = RobotMode.DEFENCE
+                self.mode = self.PRIORITY_MODE
             elif self.have_ball:
                 self.state = RobotState.HAVE_BALL
             elif not (-15 <= ball_dir <= 15):
@@ -298,12 +300,11 @@ class Robot():
 
     def execute_defence(self):
         # If ball very close, turn to attack mode
-        if self.see_ball and self.ball_dist is not None and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST:
-            # self.mode = RobotMode.OFFENCE
+        if self.have_ball or (self.see_ball and self.ball_dist is not None and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST):
+            self.mode = RobotMode.OFFENCE
             return
-
         # Stay near own goal
-        if self.own_goal_dir is not None and self.own_goal_dist is not None and abs(self.own_goal_dist - self.DEFENCE_GOAL_DIST) > 5:
+        if self.own_goal_dir is not None and self.own_goal_dist is not None and abs(self.own_goal_dist - self.DEFENCE_GOAL_DIST) > 10:
             # If ball is behind, try to swerve around it
             if self.see_ball and self.ball_dir is not None and abs(self.own_goal_dir - self.ball_dir) < 10:
                 self.ball_capture()
@@ -312,13 +313,23 @@ class Robot():
                 self.move_spd = self.HEAD_TO_OWN_GOAL_SPD
         else:
             if self.see_ball:
-                self.ball_capture()
+                self.execute_goalie()
             else:
+                # TODO: Stay centred
                 self.move_dir = 0
-                self.move_spd = 0.1
-
-        # Face forward
-        self.target_yaw = 0
+                self.move_spd = 0
+    
+    def execute_goalie(self):
+        if self.ball_dir < 10 and (180 - self.goal_dir) % 360 < self.GOALIE_MAX_ANGLE_FROM_GOAL:
+            self.move_dir = 270
+            self.move_spd = 1.0
+        elif self.ball_dir > 10 and (180 - self.goal_dir) % 360 > -self.GOALIE_MAX_ANGLE_FROM_GOAL:
+            self.move_dir = 90
+            self.move_spd = 1.0
+        else:
+            self.move_dir = 0
+            self.move_spd = 1.0
+        self.target_yaw = self.wrap_angle(self.bot_dir + self.ball_dir)
 
     # Possession logic
     def update_possession_state(self):
@@ -362,7 +373,11 @@ class Robot():
                 self.possession_state = PossessionState.NONE
                 return
             if self.see_goal and self.goal_dir is not None:
-                self.drive.dribbler_spin(self.dribbler, math.copysign(1, self.goal_dir), self.SPIN_SHOT_SPEED, self.goal_dir, self.break_beam, self.kicker)
+                # Head toward the goal; the possession orbit in Drive aims us by
+                # orbiting the ball toward target_yaw, and is_ready_to_shoot kicks.
+                self.move_dir = self.goal_dir
+                self.move_spd = self.HEAD_TO_GOAL_SPD
+                self.target_yaw = self.goal_dir
             elif self.see_own_goal and self.own_goal_dir is not None:
                 self.move_dir = -(self.own_goal_dir + 180) % 360
                 self.move_spd = self.HEAD_TO_GOAL_SPD
@@ -530,6 +545,7 @@ class Robot():
 
             self.move_dir = math.degrees(math.atan2(move_vel_x, move_vel_y)) # Calculate direction of movement vector
             self.move_spd = math.sqrt(move_vel_x**2 + move_vel_y**2) # Calculate magnitude of movement vector
+            self.target_yaw = self.wrap_angle(self.ball_dir + self.bot_dir)
 
             if ball_dist < 50 or self.have_ball:
                 self.dribble()
