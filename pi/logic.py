@@ -10,8 +10,10 @@ import board
 
 from lib.kicker import Kicker
 from lib.comm_module import CommModule
+from lib.communication import Communication
 
 USE_COMM_MODULE = False
+USE_COMMUNICATION = False
 
 SOLENOID_PIN = board.D27
 COMM_MODULE_PIN = board.D18
@@ -119,6 +121,7 @@ class Robot():
         self.kicker = Kicker(SOLENOID_PIN, PULSE_S)
         if USE_COMM_MODULE:
             self.comm_module = CommModule(COMM_MODULE_PIN)
+        self.communication = Communication()
 
         # Variables
         ## Time
@@ -144,7 +147,9 @@ class Robot():
 
         ## Goal
         self.goal_dir = 0
+        self.goal_dist = None
         self.own_goal_dir = 180
+        self.own_goal_dist = None
 
         ## Line (nearest detected line from camera)
         self.nearest_line_dir = None
@@ -153,6 +158,19 @@ class Robot():
         ## Bot Communication
         self.other_bot_have_ball = False
         self.other_bot_see_ball = False
+        self.robot_id = self.communication.client_id
+        self.other_bot_status = None
+        self.pending_attack_request = None
+        self.pending_attack_request_time = None
+        self.pending_defence_request = None
+        self.pending_defence_request_time = None
+        self.acknowledged_attack_requests = set()
+        self.acknowledged_defence_requests = set()
+        self.ROLE_HANDOFF_TIMEOUT_S = 1.0
+
+        if USE_COMMUNICATION:
+            self.communication.on_message = self.handle_communication_message
+            self.communication.start()
 
 
     def on_update(self):
@@ -208,8 +226,327 @@ class Robot():
         if USE_COMM_MODULE and self.comm_module.read():
             self.drive.stop()
         else:
+            if USE_COMMUNICATION:
+                self.maybe_request_attack_handoff()
+                self.maybe_request_defence_handoff()
+                self.communication.send(self.build_status_message())
+
             # Execute movement
             self.move()
+
+
+    # ------ Bot Communication ------ #
+    def communication_number(self, value):
+        if value is None:
+            return None
+        return float(value)
+
+    def build_status_message(self):
+        attack_request = None
+        if self.pending_attack_request is not None:
+            attack_request = self.pending_attack_request
+
+        defence_request = None
+        if self.pending_defence_request is not None:
+            defence_request = self.pending_defence_request
+
+        return {
+            "type": "status",
+            "mode": self.mode.name,
+            "state": self.state.name,
+            "possession_state": self.possession_state.name,
+            "see_ball": self.see_ball,
+            "have_ball": self.have_ball,
+            "ball_dist": self.communication_number(self.ball_dist),
+            "goal_dist": self.communication_number(self.goal_dist),
+            "own_goal_dist": self.communication_number(self.own_goal_dist),
+            "attack_priority": self.has_attack_priority(),
+            "attack_request": attack_request,
+            "defence_request": defence_request,
+        }
+
+    def handle_communication_message(self, payload, _topic):
+        sender = payload.get("sender")
+        if sender is None or sender == self.robot_id:
+            return
+
+        message = payload.get("message", payload)
+        if not isinstance(message, dict):
+            return
+
+        message_type = message.get("type")
+        if message_type == "status":
+            self.handle_status_message(sender, message)
+        elif message_type == "attack_request":
+            self.handle_attack_request(sender, message)
+        elif message_type == "attack_ack":
+            self.handle_attack_ack(message)
+        elif message_type == "defence_request":
+            self.handle_defence_request(sender, message)
+        elif message_type == "defence_ack":
+            self.handle_defence_ack(message)
+
+    def handle_status_message(self, sender, message):
+        self.other_bot_status = {
+            "sender": sender,
+            "received_at": time.monotonic(),
+            **message,
+        }
+        self.other_bot_see_ball = bool(message.get("see_ball", False))
+        self.other_bot_have_ball = bool(message.get("have_ball", False))
+
+        attack_request = message.get("attack_request")
+        if isinstance(attack_request, dict):
+            self.handle_attack_request(sender, attack_request)
+
+        defence_request = message.get("defence_request")
+        if isinstance(defence_request, dict):
+            self.handle_defence_request(sender, defence_request)
+
+    def handle_attack_request(self, sender, request):
+        if request.get("requester") != sender:
+            return
+        if request.get("target_mode") != RobotMode.OFFENCE.name:
+            return
+        if self.mode != RobotMode.DEFENCE:
+            return
+        if self.pending_attack_request is not None:
+            if self.PRIORITY_MODE == RobotMode.OFFENCE:
+                return
+            self.pending_attack_request = None
+            self.pending_attack_request_time = None
+            self.send_attack_ack(sender, request)
+            return
+
+        requester_goal_dist = request.get("goal_dist")
+        if requester_goal_dist is None or self.goal_dist is None:
+            return
+        if requester_goal_dist > self.goal_dist:
+            return
+
+        self.send_attack_ack(sender, request)
+
+    def send_attack_ack(self, sender, request):
+        self.communication.send({
+            "type": "attack_ack",
+            "request_id": request.get("request_id"),
+            "target": sender,
+            "acknowledged_by": self.robot_id,
+        })
+
+    def handle_attack_ack(self, message):
+        if message.get("target") != self.robot_id:
+            return
+        if self.pending_attack_request is None:
+            return
+        if message.get("request_id") != self.pending_attack_request.get("request_id"):
+            return
+
+        self.acknowledged_attack_requests.add(message["request_id"])
+        self.pending_attack_request = None
+        self.pending_attack_request_time = None
+        self.mode = RobotMode.OFFENCE
+
+    def handle_defence_request(self, sender, request):
+        if request.get("requester") != sender:
+            return
+        if request.get("target_mode") != RobotMode.DEFENCE.name:
+            return
+        if self.mode != RobotMode.OFFENCE:
+            return
+        if self.pending_defence_request is not None:
+            if self.PRIORITY_MODE == RobotMode.DEFENCE:
+                return
+            self.pending_defence_request = None
+            self.pending_defence_request_time = None
+            self.send_defence_ack(sender, request)
+            return
+        if not self.should_accept_defence_request(request):
+            return
+
+        self.send_defence_ack(sender, request)
+
+    def send_defence_ack(self, sender, request):
+        self.communication.send({
+            "type": "defence_ack",
+            "request_id": request.get("request_id"),
+            "target": sender,
+            "acknowledged_by": self.robot_id,
+        })
+
+    def handle_defence_ack(self, message):
+        if message.get("target") != self.robot_id:
+            return
+        if self.pending_defence_request is None:
+            return
+        if message.get("request_id") != self.pending_defence_request.get("request_id"):
+            return
+
+        self.acknowledged_defence_requests.add(message["request_id"])
+        self.pending_defence_request = None
+        self.pending_defence_request_time = None
+        self.mode = RobotMode.DEFENCE
+
+    def has_attack_priority(self):
+        return (
+            self.have_ball
+            or (
+                self.see_ball
+                and self.ball_dist is not None
+                and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST
+            )
+        )
+
+    def status_has_attack_priority(self, status):
+        if status.get("attack_priority") is not None:
+            return bool(status.get("attack_priority"))
+        return (
+            bool(status.get("have_ball", False))
+            or (
+                bool(status.get("see_ball", False))
+                and status.get("ball_dist") is not None
+                and status.get("ball_dist") < self.TURN_TO_OFFENCE_BALL_DIST
+            )
+        )
+
+    def _wins_tiebreak(self):
+        """Deterministic fallback so both robots never drop back at once."""
+        other_id = ""
+        if self.other_bot_status is not None:
+            other_id = self.other_bot_status.get("sender", "")
+        return self.robot_id < other_id
+
+    def _self_is_closer(self, self_dist, other_dist):
+        """True if self should win a "closer is better" contest (lower distance)."""
+        if self_dist is None and other_dist is None:
+            return self._wins_tiebreak()
+        if self_dist is None:
+            return False
+        if other_dist is None:
+            return True
+        if self_dist < other_dist:
+            return True
+        if self_dist > other_dist:
+            return False
+        return self._wins_tiebreak()
+
+    def offence_contest_self_attacks(self):
+        """Decide which of two offence robots should remain the attacker.
+
+        Returns True if this robot should attack, False if it should drop to
+        defence. Priority order: attack priority, then ball possession, then
+        closeness to the ball; if neither has priority, closeness to the goal.
+        """
+        status = self.other_bot_status
+        self_priority = self.has_attack_priority()
+        other_priority = self.status_has_attack_priority(status)
+
+        if self_priority != other_priority:
+            return self_priority
+
+        if self_priority and other_priority:
+            self_have = self.have_ball
+            other_have = bool(status.get("have_ball", False))
+            if self_have != other_have:
+                return self_have
+            return self._self_is_closer(self.ball_dist, status.get("ball_dist"))
+
+        return self._self_is_closer(self.goal_dist, status.get("goal_dist"))
+
+    def should_accept_defence_request(self, request):
+        if self.mode != RobotMode.OFFENCE or self.other_bot_status is None:
+            return False
+        return self.offence_contest_self_attacks() is True
+
+    def maybe_request_attack_handoff(self):
+        if self.mode != RobotMode.DEFENCE:
+            self.pending_attack_request = None
+            self.pending_attack_request_time = None
+            return
+        if self.goal_dist is None or self.other_bot_status is None:
+            return
+        if self.other_bot_status.get("mode") != RobotMode.DEFENCE.name:
+            self.pending_attack_request = None
+            self.pending_attack_request_time = None
+            return
+
+        other_goal_dist = self.other_bot_status.get("goal_dist")
+        if other_goal_dist is None:
+            return
+
+        now = time.monotonic()
+        should_attack = self.goal_dist < other_goal_dist
+        if not should_attack:
+            self.pending_attack_request = None
+            self.pending_attack_request_time = None
+            return
+
+        if self.pending_attack_request is not None:
+            if now - self.pending_attack_request_time < self.ROLE_HANDOFF_TIMEOUT_S:
+                return
+            self.pending_attack_request = None
+            self.pending_attack_request_time = None
+
+        request_id = f"{self.robot_id}-{int(now * 1000)}"
+        self.pending_attack_request = {
+            "type": "attack_request",
+            "request_id": request_id,
+            "requester": self.robot_id,
+            "target_mode": RobotMode.OFFENCE.name,
+            "goal_dist": self.communication_number(self.goal_dist),
+            "created_at": now,
+        }
+        self.pending_attack_request_time = now
+
+    def maybe_request_defence_handoff(self):
+        if self.mode != RobotMode.OFFENCE:
+            self.pending_defence_request = None
+            self.pending_defence_request_time = None
+            return
+        if self.goal_dist is None or self.other_bot_status is None:
+            return
+        if self.other_bot_status.get("mode") != RobotMode.OFFENCE.name:
+            self.pending_defence_request = None
+            self.pending_defence_request_time = None
+            return
+
+        now = time.monotonic()
+        self_has_priority = self.has_attack_priority()
+        should_defend = not self.offence_contest_self_attacks()
+
+        if not should_defend:
+            self.pending_defence_request = None
+            self.pending_defence_request_time = None
+            return
+
+        if self.pending_defence_request is not None:
+            if now - self.pending_defence_request_time < self.ROLE_HANDOFF_TIMEOUT_S:
+                return
+            self.pending_defence_request = None
+            self.pending_defence_request_time = None
+
+        request_id = f"{self.robot_id}-{int(now * 1000)}"
+        self.pending_defence_request = {
+            "type": "defence_request",
+            "request_id": request_id,
+            "requester": self.robot_id,
+            "target_mode": RobotMode.DEFENCE.name,
+            "goal_dist": self.communication_number(self.goal_dist),
+            "attack_priority": self_has_priority,
+            "created_at": now,
+        }
+        self.pending_defence_request_time = now
+
+    def request_mode_change(self, mode):
+        if mode != RobotMode.OFFENCE:
+            self.mode = mode
+            return
+
+        if not USE_COMMUNICATION:
+            self.mode = mode
+            return
+
+        self.maybe_request_attack_handoff()
 
 
     # ------ State Machine ------ #
@@ -301,8 +638,10 @@ class Robot():
     def execute_defence(self):
         # If ball very close, turn to attack mode
         if self.have_ball or (self.see_ball and self.ball_dist is not None and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST):
-            self.mode = RobotMode.OFFENCE
-            return
+            previous_mode = self.mode
+            self.request_mode_change(RobotMode.OFFENCE)
+            if self.mode != previous_mode:
+                return
         # Stay near own goal
         if self.own_goal_dir is not None and self.own_goal_dist is not None and abs(self.own_goal_dist - self.DEFENCE_GOAL_DIST) > 10:
             # If ball is behind, try to swerve around it

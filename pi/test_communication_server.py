@@ -1,30 +1,8 @@
 import argparse
-import json
 import socket
 import time
 
-try:
-    import paho.mqtt.client as mqtt  # type: ignore[import-not-found]
-except ImportError as error:
-    raise SystemExit("Install MQTT support with: python -m pip install paho-mqtt") from error
-
-
-DEFAULT_BROKER = "localhost"
-DEFAULT_PORT = 1883
-DEFAULT_TOPIC = "soccer/pi/messages"
-DEFAULT_REPLY_TOPIC = "soccer/pi/replies"
-
-
-def build_client(client_id):
-    return mqtt.Client(client_id=client_id)
-
-
-def decode_payload(payload):
-    text = payload.decode("utf-8", errors="replace")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return {"message": text}
+from lib.communication import Communication, DEFAULT_BROKER, DEFAULT_PORT, DEFAULT_REPLY_TOPIC, DEFAULT_TOPIC
 
 
 def main():
@@ -36,35 +14,25 @@ def main():
     parser.add_argument("--client-id", default=f"pi-server-{socket.gethostname()}", help="MQTT client id")
     args = parser.parse_args()
 
-    client = build_client(args.client_id)
+    communication = Communication(
+        broker=args.broker,
+        port=args.port,
+        topic=args.topic,
+        reply_topic=args.reply_topic,
+        client_id=args.client_id,
+    )
 
-    def on_connect(client, _userdata, _flags, reason_code, _properties=None):
-        if int(reason_code) != 0:
-            print(f"Failed to connect to MQTT broker: {reason_code}")
-            return
-
-        client.subscribe(args.topic)
-        print(f"Connected to {args.broker}:{args.port}; listening on {args.topic}")
-
-    def on_message(client, _userdata, message):
-        payload = decode_payload(message.payload)
+    def on_message(payload, topic):
         sender = payload.get("sender", "unknown")
         body = payload.get("message", payload)
         reply_topic = payload.get("reply_topic") or args.reply_topic
 
-        print(f"[{time.strftime('%H:%M:%S')}] {sender} -> {message.topic}: {body}")
+        print(f"[{time.strftime('%H:%M:%S')}] {sender} -> {topic}: {body}")
+        communication.reply(f"received: {body}", reply_topic)
 
-        reply = {
-            "sender": args.client_id,
-            "message": f"received: {body}",
-            "received_at": time.time(),
-        }
-        client.publish(reply_topic, json.dumps(reply), qos=1)
-
-    client.on_connect = on_connect
-    client.on_message = on_message
-    client.connect(args.broker, args.port, keepalive=60)
-    client.loop_forever()
+    communication.on_message = on_message
+    print(f"Listening on {args.topic}")
+    communication.loop_forever()
 
 
 if __name__ == "__main__":

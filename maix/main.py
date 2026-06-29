@@ -27,9 +27,9 @@ def to_cm(dist):
         return 0
     return int(round(dist / MM_PER_CM))
 
-DO_DISP = not True
+DO_DISP = False
 # Set True on-device to skip waiting for a pi detect command and log FPS.
-BENCH_FPS = True
+BENCH_FPS = False
 
 # Quality (0-100) for frames streamed in DEBUG mode. Lower keeps the JPEG
 # small enough to push over the 115200 baud UART at a usable frame rate.
