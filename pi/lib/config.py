@@ -1,24 +1,22 @@
 import json
 
-# globals
+class Config():
+    def __init__(self, file="/home/dsa/Robotics/config.json"):
+        self._file = file
+        self._config = {}
+        self.load_config()
 
-config_file = "/home/dsa/Robotics/config.json"
-_globals = {}
+    def load_config(self):
+        with open(self._file, "r") as f:
+            self._config = json.load(f)
 
-def load_config():
-    global _globals
-    with open(config_file, "r") as f:
-        _globals = json.load(f)
+    def save_config(self):
+        with open(self._file, "w") as f:
+            json.dump(self._config, f, indent=4)
 
-def save_config():
-    with open(config_file, "w") as f:
-        json.dump(_globals, f, indent=4)
+    def get_value(self, key, default=None):
+        return self._config.get(key, default)
 
-def get_value(key, default=None):
-    return _globals.get(key, default)
-
-def set_value(key, value):
-    _globals[key] = value
-    return
-
-load_config()
+    def set_value(self, key, value):
+        self._config[key] = value
+        return

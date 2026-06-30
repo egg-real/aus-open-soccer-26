@@ -29,5 +29,15 @@
             "elec_angle_offset": 1379574528,
             "sin_cos_centre": 1250
         }
+    },
+    "switches": {
+        "12": {
+            "pin": 12,
+            "on_high": true
+        },
+        "goal": {
+            "pin": 16,
+            "on_high": true
+        }
     }
 }

@@ -2,7 +2,7 @@ import time
 import math
 import threading
 from lib.motor import Motor
-import lib.config as config
+from lib.config import Config
 from lib.imu import IMU
 from math import radians, sin
 
@@ -26,7 +26,7 @@ def wrap_angle(theta):
     """Input an angle in degrees. Returns same angle but in [-180, 180)."""
     return (theta + 180) % 360 - 180
 
-def capture_startup_yaw(imu, sample_count=25, sample_interval=0.02):
+def capture_startup_yaw(imu:IMU, sample_count=25, sample_interval=0.02):
     """Average a short burst of IMU samples so startup yaw is not just the first reading."""
     print("Stabilizing IMU yaw reference...")
     sin_sum = 0.0
@@ -43,7 +43,7 @@ def capture_startup_yaw(imu, sample_count=25, sample_interval=0.02):
     return math.degrees(math.atan2(sin_sum, cos_sum))
 
 class Drive:
-    def __init__(self, imu, motors: list[str]=["ne", "se", "sw", "nw"]):
+    def __init__(self, motors: list[str]=["ne", "se", "sw", "nw"], imu:IMU=IMU(), config:Config=Config()):
         motors_config = config.get_value("motors")
         self.motors = {}
         self.current_direction = 0
