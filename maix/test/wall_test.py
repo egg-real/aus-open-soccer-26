@@ -1,7 +1,6 @@
 from maix import app, camera, display, image
 import math
 import numpy as np
-import os
 import time
 
 IMG_WIDTH = 640

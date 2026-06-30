@@ -11,6 +11,10 @@ import board
 from lib.kicker import Kicker
 from lib.comm_module import CommModule
 from lib.communication import Communication
+from pi.lib.imu import IMU
+from pi.lib.localisation import Localisation
+from pi.lib.switch import Switch
+from pi.lib.tof import ToF
 
 USE_COMM_MODULE = False
 USE_COMMUNICATION = False
@@ -50,8 +54,6 @@ class Robot():
         """Initialise"""
 
         # ----- SETTINGS ----- #
-        # Target Goal
-        self.target_goal = GoalColour.YELLOW
 
         # Role
         self.PRIORITY_MODE = RobotMode.OFFENCE
@@ -86,7 +88,7 @@ class Robot():
         self.CRAB_WALK_DIST_TO_WALL = 40 # Aim to keep this distance from wall when crab walking
         self.CRAB_WALK_ANGLE = 90 # Somewhere inbetween 45 to 135, 135 means it faces more towards own goal
         self.TRIGGER_BALL_HIDE_LINE_DIST = 40
-        self.LINE_AVOID_THRESHOLD = 30  # close to cm, start filtering out-of-bounds component within this distance
+        self.WALL_AVOID_THRESHOLD = 30  # cm, start filtering into-wall movement within this distance
 
         ## Ball capture PD control
         self.CAPTURE_WIDTH = 50 # Max lateral distance to decide to move forward (close to cm)
@@ -110,10 +112,11 @@ class Robot():
         self.have_ball = False
         self.see_goal = False
         self.see_own_goal = False
-        self.avoiding_line = False
+        self.avoiding_wall = False
 
         # Initialize Hardware Interfaces
-        self.drive = Drive()
+        self.imu = IMU()
+        self.drive = Drive(self.imu)
         self.cameras = Cameras()
         self.cameras.start_streaming()
         self.dribbler = Dribbler()
@@ -121,7 +124,12 @@ class Robot():
         self.kicker = Kicker(SOLENOID_PIN, PULSE_S)
         if USE_COMM_MODULE:
             self.comm_module = CommModule(COMM_MODULE_PIN)
+        self.pause_switch = Switch(board.D16)
+        self.goal_switch = Switch(board.D18)
         self.communication = Communication()
+        self.tofs = (ToF(0x50), ToF(0x51), ToF(0x52), ToF(0x53))
+
+        self.localisation = Localisation(self.imu, self.drive)
 
         # Variables
         ## Time
@@ -135,6 +143,8 @@ class Robot():
 
         ## Position & Orientation data
         self.bot_dir = 0  # Compass sensor
+        self.nearest_wall_dir = None
+        self.nearest_wall_dist = None
 
         ## Ball
         self.ball_dir = 0
@@ -146,6 +156,7 @@ class Robot():
         self.last_ball_x_error = 0 # Memory for ball_capture PD control
 
         ## Goal
+        self.target_goal = GoalColour.YELLOW if self.goal_switch.read() else GoalColour.BLUE
         self.goal_dir = 0
         self.goal_dist = None
         self.own_goal_dir = 180
@@ -179,6 +190,9 @@ class Robot():
         current_time = time.monotonic()
         self.dt = current_time - self.last_time
         self.last_time = current_time
+
+        # Update orientation data
+        self.bot_dir = self.drive.yaw
 
         # Update camera data
         self.cameras.process()
@@ -223,7 +237,7 @@ class Robot():
         # State machine
         self.execute_behaviour()
 
-        if USE_COMM_MODULE and self.comm_module.read():
+        if self.pause_switch.read() or (USE_COMM_MODULE and self.comm_module.read()):
             self.drive.stop()
         else:
             if USE_COMMUNICATION:
@@ -863,7 +877,7 @@ class Robot():
                 if expected_closing_rate > 10:
                     self.move_spd *= 2 - max(0.5, min(1.5, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
         
-        if self.avoiding_line and self.ball_dir is not None:
+        if self.avoiding_wall and self.ball_dir is not None:
             self.target_yaw = self.ball_dir
 
     def lining_up(self):
@@ -920,40 +934,81 @@ class Robot():
     # ------ Action Functions ------ #
 
     def move(self):
-        move_dir, move_spd = self.avoid_line(self.move_dir, self.move_spd)
+        move_dir, move_spd = self.avoid_wall(self.move_dir, self.move_spd)
         self.drive.move(move_dir, move_spd, self.target_yaw, self.have_ball)
     
-    def avoid_line(self, move_dir, move_spd):
+    def closest_wall(self):
+        """Return the closest actual field-wall normal and distance in cm."""
+        tof_readings = (
+            (0, self.tofN.read()),
+            (90, self.tofE.read()),
+            (180, self.tofS.read()),
+            (-90, self.tofW.read()),
+        )
+        wall_normals = (0, 90, 180, -90)
+
+        closest_normal = None
+        closest_dist = None
+        for wall_normal in wall_normals:
+            best_alignment = None
+            best_distance = None
+
+            for sensor_dir, distance_mm in tof_readings:
+                if distance_mm is None or distance_mm <= 0:
+                    continue
+
+                sensor_abs_dir = self.wrap_angle(self.bot_dir + sensor_dir)
+                sensor_to_wall_angle = self.wrap_angle(sensor_abs_dir - wall_normal)
+                alignment = math.cos(math.radians(sensor_to_wall_angle))
+                if alignment <= 0:
+                    continue
+
+                # Project the angled ToF ray onto the real wall normal.
+                distance_cm = (distance_mm / 10) * alignment
+                if best_alignment is None or alignment > best_alignment:
+                    best_alignment = alignment
+                    best_distance = distance_cm
+
+            if best_distance is None:
+                continue
+
+            if closest_dist is None or best_distance < closest_dist:
+                closest_normal = wall_normal
+                closest_dist = best_distance
+
+        return closest_normal, closest_dist
+
+    def avoid_wall(self, move_dir, move_spd):
         """
-        If the bot is within LINE_AVOID_THRESHOLD of a line, remove the velocity
-        component perpendicular to the line and keep the parallel component
+        If the bot is near a wall, remove the velocity component driving into it.
         """
 
-        self.avoiding_line = False
-        if self.line_dist(move_dir) is None or self.line_dir(move_dir) is None:
+        self.avoiding_wall = False
+        self.nearest_wall_dir, self.nearest_wall_dist = self.closest_wall()
+        if self.nearest_wall_dir is None or self.nearest_wall_dist is None:
             return move_dir, move_spd
-        if self.line_dist(move_dir) >= self.LINE_AVOID_THRESHOLD:
+        if self.nearest_wall_dist >= self.WALL_AVOID_THRESHOLD:
             return move_dir, move_spd
-        
-        self.avoiding_line = True
 
-        # Unit vector pointing toward the line (perpendicular-to-line axis)
-        line_rad = math.radians(self.to_relative_dir(self.nearest_line_dir))
-        toward_line_x = math.sin(line_rad)
-        toward_line_y = math.cos(line_rad)
+        self.avoiding_wall = True
+
+        # Unit vector pointing toward the actual field wall normal in the robot frame.
+        wall_rad = math.radians(self.to_relative_dir(self.nearest_wall_dir))
+        toward_wall_x = math.sin(wall_rad)
+        toward_wall_y = math.cos(wall_rad)
 
         # Decompose the intended movement vector into x and y
         move_rad = math.radians(move_dir)
         vx = move_spd * math.sin(move_rad)
         vy = move_spd * math.cos(move_rad)
 
-        # Project movement onto the toward-line axis
-        dot = vx * toward_line_x + vy * toward_line_y
+        # Project movement onto the toward-wall axis
+        dot = vx * toward_wall_x + vy * toward_wall_y
 
-        # Only suppress the component if it's moving toward the line (dot > 0)
+        # Only suppress the component if it's moving toward the wall (dot > 0)
         if dot > 0:
-            vx -= dot * toward_line_x
-            vy -= dot * toward_line_y
+            vx -= dot * toward_wall_x
+            vy -= dot * toward_wall_y
 
         new_spd = math.hypot(vx, vy)
         if new_spd < 1e-6:
@@ -988,7 +1043,7 @@ class Robot():
 
     def wrap_angle(self, theta):
         """Input an angle in degrees\nReturns same angle but in [-180,180)"""
-        if theta == None:
+        if theta is None:
             return None
         return (theta + 180) % 360 - 180
 

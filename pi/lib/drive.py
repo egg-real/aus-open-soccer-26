@@ -43,7 +43,7 @@ def capture_startup_yaw(imu, sample_count=25, sample_interval=0.02):
     return math.degrees(math.atan2(sin_sum, cos_sum))
 
 class Drive:
-    def __init__(self, motors: list[str]=["ne", "se", "sw", "nw"]):
+    def __init__(self, imu, motors: list[str]=["ne", "se", "sw", "nw"]):
         motors_config = config.get_value("motors")
         self.motors = {}
         self.current_direction = 0
@@ -58,7 +58,7 @@ class Drive:
         self.last_orbit_time = time.monotonic()
         self.target_lock = threading.Lock()
         self.last_update_time = time.monotonic()
-        self.imu = IMU()
+        self.imu = imu
         self.initial_yaw = capture_startup_yaw(self.imu)
         self.yaw = 0
         for motor_direction in motors:

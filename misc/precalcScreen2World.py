@@ -1,6 +1,5 @@
 import numpy as np
-import cv2
-from math import cos, sin, pi, atan2, tan, radians, degrees, hypot
+from math import cos, sin, atan2, tan, radians, degrees, hypot
 #raw camera specs
 cameraResX = 640
 cameraResY = 360

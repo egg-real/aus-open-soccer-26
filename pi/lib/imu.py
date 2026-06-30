@@ -16,6 +16,7 @@ class IMU:
         self._running = True
         self._latest_quaternion = None
         self._latest_yaw = None
+        self._latest_acceleration = None
 
         i2c = busio.I2C(board.SCL, board.SDA)
         self._bno = BNO08X_I2C(i2c)
@@ -32,6 +33,7 @@ class IMU:
                 with self._lock:
                     self._latest_quaternion = (quat_i, quat_j, quat_k, quat_real)
                     self._latest_yaw = yaw
+                    # TODO: Add acceleration
             except Exception:
                 # Keep the updater alive if a read occasionally fails.
                 pass
@@ -51,6 +53,11 @@ class IMU:
         with self._lock:
             return self._latest_yaw
 
+    def get_acceleration(self):
+        with self._lock:
+            return self._latest_acceleration
+
     def close(self):
         self._running = False
         self._thread.join(timeout=1.0)
+

@@ -5,7 +5,7 @@ import board
 from lib.kicker import Kicker
 from lib.dribbler import Dribbler
 from lib.break_beam import BreakBeam
-from lib.drive import Drive, wrap_angle, ORBIT_RADIUS_CM
+from lib.drive import Drive
 
 DRIBBLER_SPEED = 1.0
 UPDATE_INTERVAL_SECONDS = 0.02
