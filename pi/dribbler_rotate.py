@@ -22,15 +22,13 @@ if __name__ == "__main__":
     dribbler = Dribbler()
     drive = Drive()
     kicker = Kicker(SOLENOID_PIN, PULSE_S)
-    break_beam = BreakBeam(BREAK_BEAM_PIN)
 
     dribbler.set_speed(DRIBBLER_SPEED)
     target_yaw = 180.0
 
     try:
         while drive.yaw < target_yaw:
-            have_ball = break_beam.read()
-            drive.move(0, 0, target_yaw, possession=have_ball)
+            drive.move(0, 0, target_yaw, possession=True)
             time.sleep(UPDATE_INTERVAL_SECONDS)
 
         drive.stop()
