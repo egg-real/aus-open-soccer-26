@@ -51,7 +51,7 @@ SLIP_NOISE_SCALE_MAX = 6.0       # Cap on the process-noise multiplier.
 SLIP_DECAY = 0.85
 
 # ----- Particle filter ----- #
-NUM_PARTICLES = 1000
+NUM_PARTICLES = 500
 RESAMPLE_THRESHOLD_RATIO = 0.5  # Resample when N_eff < ratio * N.
 # Startup cloud spread, per axis. Robots begin lined up vertically (along y),
 # so the North/South ToFs (which give y) are occluded by neighbouring robots and
@@ -67,7 +67,12 @@ ALPHA_FAST = 0.2
 
 # ----- Output ----- #
 LOCALIZED_STD_MM = 300.0        # Position std below which we call it localised.
-LOOP_SLEEP_S = 0.01
+# Fixed loop period. The filter used to free-run near 100 Hz, and each cycle
+# reads all four motor QDRs (get_body_velocity) plus the ToFs and runs the
+# particle update. That starved the drive loop and its yaw controller. ToF/IMU
+# dynamics are slow, so ~40 Hz is plenty for localisation and leaves headroom
+# for the drive loop to keep correcting yaw smoothly.
+LOOP_PERIOD_S = 0.025
 
 _EPS_DIR = 1e-9
 _TINY = 1e-300
@@ -377,6 +382,8 @@ class Localisation:
 
     def _update_loop(self):
         while self._running:
+            loop_start = time.monotonic()
+
             yaw = self._get_yaw()
             self._predict(yaw)
 
@@ -392,7 +399,9 @@ class Localisation:
             if quality is not None:
                 self._maybe_resample(quality)
 
-            time.sleep(LOOP_SLEEP_S)
+            elapsed = time.monotonic() - loop_start
+            if elapsed < LOOP_PERIOD_S:
+                time.sleep(LOOP_PERIOD_S - elapsed)
 
     # ------ Public API ------ #
     def get_position(self):

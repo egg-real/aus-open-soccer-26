@@ -6,6 +6,8 @@ import smbus2
 import struct
 import math
 
+from lib.i2c_bus import I2C_LOCK as _I2C_LOCK
+
 MAX_SPEED = 546133333
 
 # Quick Data Readout (QDR) short format (FORMAT = 0x00) layout, 10 bytes total:
@@ -67,40 +69,46 @@ class Motor:
         try:
             speed = int(self.max_speed * clamp(speed, -1.0, 1.0))
             data = struct.pack("<i", speed)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x12, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x12, list(data))
         except Exception as e:
             print(f"Error setting Speed: {e}")
 
     def set_iq_PID_constants(self, kp, ki):
         try:
             data = struct.pack("<ii", kp, ki)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x40, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x40, list(data))
         except Exception as e:
             print(f"Error setting Iq PID constants: {e}")
 
     def set_id_PID_constants(self, kp, ki):
         try:
             data = struct.pack("<ii", kp, ki)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x41, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x41, list(data))
         except Exception as e:
             print(f"Error setting Id PID constants: {e}")
 
     def set_speed_PID_constants(self, kp, ki, kd):
         try:
             data = struct.pack("<fff", kp, ki, kd)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x42, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x42, list(data))
         except Exception as e:
             print(f"Error setting Speed PID constants: {e}")
 
     def configure_operating_mode_and_sensor(self, operatingmode, sensortype):
         try:
-            self.bus.write_byte_data(self.i2c_address, 0x20, operatingmode + (sensortype << 4))
+            with _I2C_LOCK:
+                self.bus.write_byte_data(self.i2c_address, 0x20, operatingmode + (sensortype << 4))
         except Exception as e:
             print(f"Error configuring Operating Mode and Sensor: {e}")
 
     def configure_command_mode(self, commandmode):
         try:
-            self.bus.write_byte_data(self.i2c_address, 0x21, commandmode)
+            with _I2C_LOCK:
+                self.bus.write_byte_data(self.i2c_address, 0x21, commandmode)
         except Exception as e:
             print(f"Error configuring Command Mode: {e}")
 
@@ -108,21 +116,24 @@ class Motor:
         try:
             self.max_speed = abs(speed_limit)
             data = struct.pack("<i", self.max_speed)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x34, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x34, list(data))
         except Exception as e:
             print(f"Error setting Speed Limit: {e}")
 
     def set_torque(self, torque):
         try:
             data = struct.pack("<i", torque)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x11, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x11, list(data))
         except Exception as e:
             print(f"Error setting Torque: {e}")
 
     def set_position(self, position, elecangle):
         try:
             data = struct.pack("<I", position)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x13, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x13, list(data))
             self.send8bitvalue(elecangle)
         except Exception as e:
             print(f"Error setting Position: {e}")
@@ -130,28 +141,32 @@ class Motor:
     def set_current_limit_FOC(self, current):
         try:
             data = struct.pack("<i", current)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x33, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x33, list(data))
         except Exception as e:
             print(f"Error setting Current Limit FOC: {e}")
 
     def set_elec_angle_offset(self, ELECANGLEOFFSET):
         try:
             data = struct.pack("<I", ELECANGLEOFFSET)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x30, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x30, list(data))
         except Exception as e:
             print(f"Error setting ELECANGLEOFFSET: {e}")
 
     def set_sin_cos_centre(self, SINCOSCENTRE):
         try:
             data = struct.pack("<i", SINCOSCENTRE)
-            self.bus.write_i2c_block_data(self.i2c_address, 0x32, list(data))
+            with _I2C_LOCK:
+                self.bus.write_i2c_block_data(self.i2c_address, 0x32, list(data))
         except Exception as e:
             print(f"Error setting SINCOSCENTRE: {e}")
             
     def set_quick_data_readout_format(self, format_byte):
         try:
             self.QDRformat = format_byte
-            self.bus.write_byte_data(self.i2c_address, 0x22, format_byte)
+            with _I2C_LOCK:
+                self.bus.write_byte_data(self.i2c_address, 0x22, format_byte)
         except Exception as e:
             print(f"Error setting Quick Data Readout format: {e}")
 
@@ -164,7 +179,8 @@ class Motor:
         """
         try:
             msg = smbus2.i2c_msg.read(self.i2c_address, QDR_BYTE_COUNT)
-            self.bus.i2c_rdwr(msg)
+            with _I2C_LOCK:
+                self.bus.i2c_rdwr(msg)
             data = bytes(msg)
             self.qdr_position = int.from_bytes(data[0:4], byteorder='little', signed=False)
             self.qdr_speed = int.from_bytes(data[4:8], byteorder='little', signed=True)

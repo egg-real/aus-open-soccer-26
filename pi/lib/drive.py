@@ -7,10 +7,23 @@ from lib.imu import IMU
 from math import radians, sin
 
 SMOOTHING_TIME = 0.10
+# Fixed drive-loop period. The yaw correction is a proportional controller, so
+# a stable, high update rate keeps it from overshooting. Pacing the loop (rather
+# than free-running) also stops it from starving other threads that share the
+# CPU/I2C bus (e.g. localisation), which previously made yaw correction oscillate.
+DRIVE_LOOP_PERIOD = 0.005
 YAW_CORRECT_THRESHOLD = 3.0
 YAW_CORRECT_SPEED = 0.2
 POSSESSION_YAW_CORRECT_SPEED = 0.3
 YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle yaw correction will be at the maximum speed.
+# Derivative (damping) term. The correction is otherwise pure-proportional, which
+# overshoots when the yaw feedback lags (e.g. IMU starved by I2C contention).
+# Subtracting a term proportional to how fast the error is closing damps that
+# oscillation. YAW_CORRECT_KD is effectively a derivative time in seconds.
+YAW_CORRECT_KD = 0.08
+# If the gap between yaw updates exceeds this, the derivative estimate is
+# unreliable (stale IMU / long stall), so skip damping that cycle.
+YAW_CORRECT_MAX_DT = 0.1
 
 # Dribbler Spin Constants
 DRIBBLER_SPEED = -1.0
@@ -59,6 +72,8 @@ class Drive:
         self.last_orbit_time = time.monotonic()
         self.target_lock = threading.Lock()
         self.last_update_time = time.monotonic()
+        self._last_yaw_error = 0.0
+        self._last_yaw_correct_time = None
         self.imu = imu if imu is not None else IMU()
         self.initial_yaw = capture_startup_yaw(self.imu)
         self.yaw = 0
@@ -97,6 +112,7 @@ class Drive:
     def _drive_loop(self):
         motors_config = self.config.get_value("motors", {})
         while True:
+            loop_start = time.monotonic()
             self._update_current_velocity()
 
             with self.target_lock:
@@ -119,6 +135,10 @@ class Drive:
                 motor_speed = drive_speed * -sin(radians(motor_angle))
                 motor_speed = clamp(motor_speed - yaw_correction, -1.0, 1.0)
                 motor.set_speed(motor_speed)
+
+            elapsed = time.monotonic() - loop_start
+            if elapsed < DRIVE_LOOP_PERIOD:
+                time.sleep(DRIVE_LOOP_PERIOD - elapsed)
 
     def _orbit_step(self, target_rotation):
         """Single non-blocking orbit iteration.
@@ -167,11 +187,26 @@ class Drive:
             yaw_correct_speed = self.target_yaw_correct_speed
 
         yaw_error = wrap_angle(target_rotation - self.yaw)
+
+        now = time.monotonic()
+        derivative = 0.0
+        if self._last_yaw_correct_time is not None:
+            dt = now - self._last_yaw_correct_time
+            if 0.0 < dt <= YAW_CORRECT_MAX_DT:
+                # Rate of change of the error (deg/s). wrap_angle keeps the
+                # difference on the short arc across the +/-180 seam.
+                derivative = wrap_angle(yaw_error - self._last_yaw_error) / dt
+        self._last_yaw_error = yaw_error
+        self._last_yaw_correct_time = now
+
         if abs(yaw_error) <= YAW_CORRECT_THRESHOLD:
             return 0
 
+        # PD control, normalised so |P| = 1 at YAW_CORRECT_MAX_SPEED_THRESHOLD.
+        p_term = yaw_error / YAW_CORRECT_MAX_SPEED_THRESHOLD
+        d_term = YAW_CORRECT_KD * derivative / YAW_CORRECT_MAX_SPEED_THRESHOLD
         return clamp(
-            (yaw_error / YAW_CORRECT_MAX_SPEED_THRESHOLD) * yaw_correct_speed,
+            (p_term + d_term) * yaw_correct_speed,
             -yaw_correct_speed,
             yaw_correct_speed,
         )

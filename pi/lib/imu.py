@@ -5,8 +5,10 @@ import time
 import board
 import busio
 
-from adafruit_bno08x import BNO_REPORT_ACCELEROMETER, BNO_REPORT_ROTATION_VECTOR
+from adafruit_bno08x import BNO_REPORT_ACCELEROMETER, BNO_REPORT_GAME_ROTATION_VECTOR
 from adafruit_bno08x.i2c import BNO08X_I2C
+
+from lib.i2c_bus import I2C_LOCK
 
 
 class IMU:
@@ -21,7 +23,7 @@ class IMU:
         i2c = busio.I2C(board.SCL, board.SDA)
         self._bno = BNO08X_I2C(i2c)
         self._bno.enable_feature(BNO_REPORT_ACCELEROMETER)
-        self._bno.enable_feature(BNO_REPORT_ROTATION_VECTOR)
+        self._bno.enable_feature(BNO_REPORT_GAME_ROTATION_VECTOR)
 
         self._thread = threading.Thread(target=self._update_loop, daemon=True)
         self._thread.start()
@@ -29,8 +31,9 @@ class IMU:
     def _update_loop(self):
         while self._running:
             try:
-                quat_i, quat_j, quat_k, quat_real = self._bno.quaternion
-                accel_x, accel_y, accel_z = self._bno.acceleration
+                with I2C_LOCK:
+                    quat_i, quat_j, quat_k, quat_real = self._bno.game_quaternion
+                    accel_x, accel_y, accel_z = self._bno.acceleration
                 yaw = self._quaternion_to_yaw_degrees(quat_i, quat_j, quat_k, quat_real)
                 with self._lock:
                     self._latest_quaternion = (quat_i, quat_j, quat_k, quat_real)

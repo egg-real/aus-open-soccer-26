@@ -10,9 +10,11 @@ except ImportError as exc:
         "tof.py requires smbus2. Install it with `pip install smbus2`."
     ) from exc
 
+from lib.i2c_bus import I2C_LOCK
+
 
 class ToF:
-    def __init__(self, address=0x50, bus_number=1, poll_interval=0.001):
+    def __init__(self, address=0x50, bus_number=1, poll_interval=0.02):
         self._address = address
         self._poll_interval = poll_interval
         self._lock = threading.Lock()
@@ -27,7 +29,8 @@ class ToF:
     def _read_sensor(self):
         write = i2c_msg.write(self._address, [0x10])
         read = i2c_msg.read(self._address, 5)
-        self._bus.i2c_rdwr(write, read)
+        with I2C_LOCK:
+            self._bus.i2c_rdwr(write, read)
         data = list(read)
 
         if len(data) != 5:
