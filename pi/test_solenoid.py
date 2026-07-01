@@ -8,8 +8,8 @@ import time
 
 from lib.kicker import Kicker
 
-SOLENOID_PIN = board.D26
-PULSE_S = 0.1
+SOLENOID_PIN = board.D27
+PULSE_S = 0.02
 
 
 def main():
