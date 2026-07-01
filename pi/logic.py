@@ -17,7 +17,7 @@ from lib.localisation import FIELD_X, FIELD_Y, Localisation
 from lib.switch import Switch
 from lib.tof import ToF
 
-USE_COMM_MODULE = False
+USE_COMM_MODULE = True
 USE_COMMUNICATION = False
 
 SOLENOID_PIN = board.D27
@@ -66,10 +66,10 @@ class Robot():
 
         # Constants
         ## General
-        self.BASE_BALL_CHASE_SPD = 1.0
-        self.CLOSE_BALL_CHASE_SPD = 0.6
-        self.HEAD_TO_GOAL_SPD = 0.6
-        self.HEAD_TO_OWN_GOAL_SPD = 0.4
+        self.BASE_BALL_CHASE_SPD = 0.1
+        self.CLOSE_BALL_CHASE_SPD = 0.01
+        self.HEAD_TO_GOAL_SPD = 0.2
+        self.HEAD_TO_OWN_GOAL_SPD = 0.1
         self.BALL_ORBIT_RADIUS = 14  # might be an arbitrary number
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
 
@@ -91,8 +91,7 @@ class Robot():
         self.EDGE_BALL_HIDE_Y_SPD = 0.1 # Speed to move towards goal
         self.EDGE_BALL_HIDE_READY_TO_SHOOT_DISTANCE = 70 # When gained possession of the ball, if x_coord is > this number, start edge hiding.
         self.CRAB_WALK_DIST_TO_WALL = 40 # Aim to keep this distance from wall when crab walking
-        self.CRAB_WALK_ANGLE = 90 # Somewhere inbetween 45 to 135, 135 means it faces more towards own goal
-        self.TRIGGER_BALL_HIDE_LINE_DIST = 40
+        self.TRIGGER_BALL_HIDE_WALL_DIST = 40
         self.WALL_AVOID_THRESHOLD = 30  # cm, start filtering into-wall movement within this distance
 
         ## Ball capture PD control
@@ -132,7 +131,7 @@ class Robot():
         if USE_COMM_MODULE:
             self.comm_module = CommModule(COMM_MODULE_PIN)
         self.pause_switch = Switch(board.D16, self.config)
-        self.goal_switch = Switch(board.D18, self.config)
+        self.goal_switch = Switch(board.D12, self.config)
         self.communication = Communication()
         self.tofs = (ToF(0x50), ToF(0x51), ToF(0x52), ToF(0x53))
 
@@ -173,10 +172,6 @@ class Robot():
         self.bot_position_std = None
         self.bot_localized = False
 
-        ## Line (nearest detected line from camera)
-        self.nearest_line_dir = None
-        self.nearest_line_dist = None
-
         ## Bot Communication
         self.other_bot_have_ball = False
         self.other_bot_see_ball = False
@@ -215,8 +210,6 @@ class Robot():
 
         self.ball_dir = self.wrap_angle(self.cameras.get_ball_dir())
         self.ball_dist = self.cameras.get_ball_dist()
-        self.nearest_line_dir = None
-        self.nearest_line_dist = None
 
         if self.target_goal == GoalColour.BLUE:
             self.goal_dir = self.wrap_angle(self.cameras.get_blue_goal_dir())
@@ -249,7 +242,7 @@ class Robot():
         # State machine
         self.execute_behaviour()
 
-        if self.pause_switch.read() or (USE_COMM_MODULE and self.comm_module.read()):
+        if self.pause_switch.read() or (USE_COMM_MODULE and not self.comm_module.read()):
             self.drive.stop()
         else:
             if USE_COMMUNICATION:
@@ -638,6 +631,7 @@ class Robot():
     def execute_behaviour(self):
         """Execute behaviour based on robot role"""
         self.target_yaw = 0
+        print(f"State: {self.state.name}")
 
         if self.mode == RobotMode.OFFENCE:
             self.update_offence_state()
@@ -765,12 +759,13 @@ class Robot():
             return
 
         if self.possession_state == PossessionState.NONE:
-            line_dist_E = self.line_dist(self.to_relative_dir(90))
-            line_dist_W = self.line_dist(self.to_relative_dir(-90))
+            wall_dists = self.axis_wall_dists()
+            wall_dist_E = wall_dists["E"]
+            wall_dist_W = wall_dists["W"]
             if (self.ENABLE_EDGE_BALL_HIDE
-                and line_dist_E is not None
-                and line_dist_W is not None
-                and min(line_dist_E, line_dist_W) < self.TRIGGER_BALL_HIDE_LINE_DIST):
+                and wall_dist_E is not None
+                and wall_dist_W is not None
+                and min(wall_dist_E, wall_dist_W) < self.TRIGGER_BALL_HIDE_WALL_DIST):
                 self.possession_state = PossessionState.BALL_HIDING
             else:
                 self.possession_state = PossessionState.HEADING_TO_GOAL
@@ -831,8 +826,16 @@ class Robot():
             
             # Else move toward side wall
             else:
-                field_side = np.sign(self.line_dist(self.to_relative_dir(-90)) - self.line_dist(self.to_relative_dir(90))) # right: 1, left: -1
-                wall_error = self.CRAB_WALK_DIST_TO_WALL - self.line_dist(self.to_absolute_dir(self.CRAB_WALK_ANGLE))
+                wall_dists = self.axis_wall_dists()
+                wall_dist_E = wall_dists["E"]
+                wall_dist_W = wall_dists["W"]
+                if wall_dist_E is None or wall_dist_W is None:
+                    self.try_to_find_centre()
+                    return
+
+                field_side = 1 if wall_dist_E < wall_dist_W else -1
+                side_wall_dist = wall_dist_E if field_side == 1 else wall_dist_W
+                wall_error = side_wall_dist - self.CRAB_WALK_DIST_TO_WALL
 
                 forward_dir = self.to_relative_dir(0)
                 correction_dir = self.to_relative_dir(field_side * 90)
@@ -885,40 +888,70 @@ class Robot():
             theta_2 = 2 * abs(90 - abs(self.bot_dir))
             theta_3 = 180 - theta_1 - theta_2
 
-            value = self.goal_dist * math.sin(math.radians(theta_3)) - self.wall_dist(0) * math.sin(math.radians(theta_2))  
+            wall_dist = self.wall_dist(0)
+            if wall_dist is None:
+                return False
+
+            value = self.goal_dist * math.sin(math.radians(theta_3)) - wall_dist * math.sin(math.radians(theta_2))  
             if abs(value) < self.REBOUND_SHOOT_PRECISION:
                 return True
         return False
 
-    # TODO: Use field position instead of lines
+    def axis_wall_dists(self):
+        """Return N/E/S/W wall distances in cm from the localized field position."""
+        if self.bot_position is None:
+            return {"N": None, "E": None, "S": None, "W": None}
 
-    def line_dist(self, field_angle):
-        """Estimate distance (cm) to the nearest line along a field-absolute bearing."""
-        if self.nearest_line_dist is None or self.nearest_line_dir is None:
-            return None
-        line_bearing = self.wrap_angle(self.nearest_line_dir + self.bot_dir)
-        theta = self.wrap_angle(field_angle - line_bearing)
-        cos_theta = math.cos(math.radians(theta))
-        if abs(cos_theta) < 0.05:
-            return None
-        dist = self.nearest_line_dist / cos_theta
-        return dist if dist > 0 else None
+        x, y = self.bot_position
+        if x is None or y is None:
+            return {"N": None, "E": None, "S": None, "W": None}
 
-    def line_dir(self, field_angle):
-        """Orientation of the nearest line in field-absolute degrees."""
-        if self.nearest_line_dist is None or self.nearest_line_dir is None:
+        x = min(max(float(x), 0.0), FIELD_X)
+        y = min(max(float(y), 0.0), FIELD_Y)
+        return {
+            "N": (FIELD_Y - y) / 10.0,
+            "E": (FIELD_X - x) / 10.0,
+            "S": y / 10.0,
+            "W": x / 10.0,
+        }
+
+    def field_wall_dist(self, field_angle):
+        """Distance in cm to the field wall along a field-absolute bearing."""
+        if self.bot_position is None:
             return None
-        line_bearing = self.wrap_angle(self.nearest_line_dir + self.bot_dir)
-        return self.wrap_angle(line_bearing + 90)
+
+        x, y = self.bot_position
+        if x is None or y is None:
+            return None
+        x = min(max(float(x), 0.0), FIELD_X)
+        y = min(max(float(y), 0.0), FIELD_Y)
+
+        angle = math.radians(field_angle)
+        dx = math.sin(angle)
+        dy = math.cos(angle)
+        candidates = []
+
+        if dx > 1e-9:
+            candidates.append((FIELD_X - x) / dx)
+        elif dx < -1e-9:
+            candidates.append((0.0 - x) / dx)
+
+        if dy > 1e-9:
+            candidates.append((FIELD_Y - y) / dy)
+        elif dy < -1e-9:
+            candidates.append((0.0 - y) / dy)
+
+        positive_dists = [dist for dist in candidates if dist > 0]
+        if not positive_dists:
+            return None
+        return min(positive_dists) / 10.0
 
     def wall_dist(self, relative_angle):
-        theta = self.line_dir(relative_angle) - self.bot_dir
-        return self.line_dist(relative_angle) + 12 / math.cos(math.radians(theta)) # 12cm is the distance from the centre of the line to the wall
+        return self.field_wall_dist(self.to_absolute_dir(relative_angle))
 
     def ball_capture(self):
 
         """Go around ball and try to capture it with dribbler"""
-        self.move_spd = self.BASE_BALL_CHASE_SPD
         # Sorry, a lot of magic numbers here
         # https://yuta.techblog.jp/archives/40889399.html
 
@@ -929,12 +962,17 @@ class Robot():
             ball_dir = self.last_ball_dir
             ball_dist = self.last_ball_dist
 
+        # Speed scales with distance; BASE_BALL_CHASE_SPD applies at 2x orbit radius
+        self.move_spd = max(
+            self.CLOSE_BALL_CHASE_SPD,
+            min(1.0, self.BASE_BALL_CHASE_SPD * ball_dist / (2 * self.BALL_ORBIT_RADIUS)),
+        )
+
         # Else if too close to ball, go away from it
         if ball_dist < self.BALL_ORBIT_RADIUS:
             distance_ratio = (self.BALL_ORBIT_RADIUS - ball_dist) / self.BALL_ORBIT_RADIUS
             orbit_angle = 90 + distance_ratio * 90
             self.move_dir = ball_dir + np.copysign(orbit_angle, ball_dir)
-            self.move_spd = self.CLOSE_BALL_CHASE_SPD
 
         # Else move in an angle that is tangent to a circle centered at the ball
         else:
@@ -981,11 +1019,11 @@ class Robot():
             self.move_spd = 0.8
     
     def try_to_find_centre(self):
-        # Get distances
-        dist_N = self.line_dist(self.to_absolute_dir(0))
-        dist_E = self.line_dist(self.to_absolute_dir(90))
-        dist_S = self.line_dist(self.to_absolute_dir(-180))
-        dist_W = self.line_dist(self.to_absolute_dir(-90))
+        wall_dists = self.axis_wall_dists()
+        dist_N = wall_dists["N"]
+        dist_E = wall_dists["E"]
+        dist_S = wall_dists["S"]
+        dist_W = wall_dists["W"]
 
         INF = 1e6
         dist_N = INF if dist_N is None else dist_N
@@ -994,7 +1032,7 @@ class Robot():
         dist_W = INF if dist_W is None else dist_W
         eps = 1e-6
 
-        # move away from line
+        # Move away from nearby walls.
         wx = (1.0 / (dist_W + eps)) - (1.0 / (dist_E + eps))
         wy = (1.0 / (dist_S + eps)) - (1.0 / (dist_N + eps))
 
@@ -1013,10 +1051,10 @@ class Robot():
     def closest_wall(self):
         """Return the closest actual field-wall normal and distance in cm."""
         tof_readings = (
-            (0, self.tofN.read()),
-            (90, self.tofE.read()),
-            (180, self.tofS.read()),
-            (-90, self.tofW.read()),
+            (0, self.tofs[0].read()),
+            (90, self.tofs[1].read()),
+            (180, self.tofs[2].read()),
+            (-90, self.tofs[3].read()),
         )
         wall_normals = (0, 90, 180, -90)
 
