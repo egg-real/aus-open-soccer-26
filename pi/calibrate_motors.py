@@ -5,7 +5,9 @@ import board
 import busio
 import select
 from steelbar_powerful_bldc_driver import PowerfulBLDCDriver
-from lib import config
+from lib.config import Config
+
+config = Config()
 
 # Initialize variables
 motor = [None] * 8

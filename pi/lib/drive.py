@@ -8,7 +8,7 @@ from math import radians, sin
 
 SMOOTHING_TIME = 0.10
 YAW_CORRECT_THRESHOLD = 3.0
-YAW_CORRECT_SPEED = 1.0
+YAW_CORRECT_SPEED = 0.2
 POSSESSION_YAW_CORRECT_SPEED = 0.3
 YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle yaw correction will be at the maximum speed.
 
@@ -43,8 +43,9 @@ def capture_startup_yaw(imu:IMU, sample_count=25, sample_interval=0.02):
     return math.degrees(math.atan2(sin_sum, cos_sum))
 
 class Drive:
-    def __init__(self, motors: list[str]=["ne", "se", "sw", "nw"], imu:IMU=IMU(), config:Config=Config()):
-        motors_config = config.get_value("motors")
+    def __init__(self, imu:IMU=None, config:Config=None, motors=("ne", "se", "sw", "nw")):
+        self.config = config if config is not None else Config()
+        motors_config = self.config.get_value("motors", {})
         self.motors = {}
         self.current_direction = 0
         self.current_speed = 0
@@ -58,7 +59,7 @@ class Drive:
         self.last_orbit_time = time.monotonic()
         self.target_lock = threading.Lock()
         self.last_update_time = time.monotonic()
-        self.imu = imu
+        self.imu = imu if imu is not None else IMU()
         self.initial_yaw = capture_startup_yaw(self.imu)
         self.yaw = 0
         for motor_direction in motors:
@@ -94,7 +95,7 @@ class Drive:
         return -(strafe_speed_ms / orbit_radius_m) * RAD_TO_DEG
     
     def _drive_loop(self):
-        motors_config = config.get_value("motors")
+        motors_config = self.config.get_value("motors", {})
         while True:
             self._update_current_velocity()
 
@@ -211,7 +212,7 @@ class Drive:
         Inverts the omni mixing used in _drive_loop:
         w_i = vx*sin(angle_off_i) - vy*cos(angle_off_i)
         """
-        motors_config = config.get_value("motors")
+        motors_config = self.config.get_value("motors", {})
         ata_00 = 0.0
         ata_01 = 0.0
         ata_11 = 0.0

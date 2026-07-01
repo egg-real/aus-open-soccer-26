@@ -1,8 +1,9 @@
 from lib.motor import Motor
-import lib.config as config
+from lib.config import Config
 
 class Dribbler:
-    def __init__(self):
+    def __init__(self, config:Config=None):
+        config = config if config is not None else Config()
         dribbler_config = config.get_value("motors").get("dribbler")
         self.motor = Motor(dribbler_config["address"],
                             elec_angle_offset=dribbler_config["elec_angle_offset"],

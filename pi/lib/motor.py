@@ -6,7 +6,7 @@ import smbus2
 import struct
 import math
 
-MAX_SPEED = 92_000_000
+MAX_SPEED = 546133333
 
 # Quick Data Readout (QDR) short format (FORMAT = 0x00) layout, 10 bytes total:
 #   bytes 0-3 : uint32 POSITION (1 LSB = 1 electrical revolution)

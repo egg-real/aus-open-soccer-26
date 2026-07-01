@@ -9,7 +9,7 @@ except ImportError as error:
     raise SystemExit("Install MQTT support with: python -m pip install paho-mqtt") from error
 
 
-DEFAULT_BROKER = "localhost"
+DEFAULT_BROKER = "10.42.0.1"
 DEFAULT_PORT = 1883
 DEFAULT_TOPIC = "soccer/pi/messages"
 DEFAULT_REPLY_TOPIC = "soccer/pi/replies"

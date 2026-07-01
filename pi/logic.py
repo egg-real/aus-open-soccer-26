@@ -11,10 +11,11 @@ import board
 from lib.kicker import Kicker
 from lib.comm_module import CommModule
 from lib.communication import Communication
-from pi.lib.imu import IMU
-from pi.lib.localisation import Localisation
-from pi.lib.switch import Switch
-from pi.lib.tof import ToF
+from lib.config import Config
+from lib.imu import IMU
+from lib.localisation import FIELD_X, FIELD_Y, Localisation
+from lib.switch import Switch
+from lib.tof import ToF
 
 USE_COMM_MODULE = False
 USE_COMMUNICATION = False
@@ -22,6 +23,10 @@ USE_COMMUNICATION = False
 SOLENOID_PIN = board.D27
 COMM_MODULE_PIN = board.D18
 PULSE_S = 0.02
+
+# Goal positions in localisation field coordinates (mm).
+BLUE_GOAL_POSITION = (0.0, FIELD_Y / 2.0)
+YELLOW_GOAL_POSITION = (FIELD_X, FIELD_Y / 2.0)
 
 # ----- MODES/STATES ----- #
 class RobotState(Enum):
@@ -97,7 +102,8 @@ class Robot():
 
         ## Goalie tuning
         self.TURN_TO_OFFENCE_BALL_DIST = 15
-        self.DEFENCE_GOAL_DIST = 40
+        self.DEFENCE_MAXIMUM_DISTANCE_FROM_WALL = 100
+        self.DEFENCE_MINIMUM_DISTANCE_FROM_WALL = 50
 
         # Toggles
         self.ENABLE_EDGE_BALL_HIDE = False
@@ -116,20 +122,21 @@ class Robot():
 
         # Initialize Hardware Interfaces
         self.imu = IMU()
-        self.drive = Drive(self.imu)
+        self.config = Config()
+        self.drive = Drive(self.imu, self.config)
         self.cameras = Cameras()
         self.cameras.start_streaming()
-        self.dribbler = Dribbler()
+        self.dribbler = Dribbler(self.config)
         self.break_beam = BreakBeam(board.D17)
         self.kicker = Kicker(SOLENOID_PIN, PULSE_S)
         if USE_COMM_MODULE:
             self.comm_module = CommModule(COMM_MODULE_PIN)
-        self.pause_switch = Switch(board.D16)
-        self.goal_switch = Switch(board.D18)
+        self.pause_switch = Switch(board.D16, self.config)
+        self.goal_switch = Switch(board.D18, self.config)
         self.communication = Communication()
         self.tofs = (ToF(0x50), ToF(0x51), ToF(0x52), ToF(0x53))
 
-        self.localisation = Localisation(self.imu, self.drive)
+        self.localisation = Localisation(self.imu, self.drive, self.tofs)
 
         # Variables
         ## Time
@@ -159,8 +166,12 @@ class Robot():
         self.target_goal = GoalColour.YELLOW if self.goal_switch.read() else GoalColour.BLUE
         self.goal_dir = 0
         self.goal_dist = None
+        self.localized_goal_dist = None
         self.own_goal_dir = 180
         self.own_goal_dist = None
+        self.bot_position = None
+        self.bot_position_std = None
+        self.bot_localized = False
 
         ## Line (nearest detected line from camera)
         self.nearest_line_dir = None
@@ -230,6 +241,7 @@ class Robot():
         self.see_ball = self.ball_dir is not None and self.ball_dist is not None
         self.see_goal = self.goal_dir is not None and self.goal_dist is not None
         self.see_own_goal = self.own_goal_dir is not None and self.own_goal_dist is not None
+        self.update_localisation_state()
 
         if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
@@ -255,6 +267,59 @@ class Robot():
             return None
         return float(value)
 
+    def update_localisation_state(self):
+        self.bot_position = self.localisation.get_position()
+        self.bot_position_std = self.localisation.get_position_std()
+        self.bot_localized = self.localisation.is_localized()
+        self.localized_goal_dist = self.distance_to_target_goal(self.bot_position)
+
+    def communication_position(self, position):
+        if position is None:
+            return None
+        x, y = position
+        return {
+            "x": self.communication_number(x),
+            "y": self.communication_number(y),
+        }
+
+    def position_from_message(self, message):
+        position = message.get("position")
+        if not isinstance(position, dict):
+            return None
+
+        x = position.get("x")
+        y = position.get("y")
+        if x is None or y is None:
+            return None
+
+        try:
+            return float(x), float(y)
+        except (TypeError, ValueError):
+            return None
+
+    def message_goal_dist(self, message):
+        position = self.position_from_message(message)
+        if position is not None:
+            return self.distance_to_target_goal(position)
+        return message.get("goal_dist")
+
+    def target_goal_position(self):
+        if self.target_goal == GoalColour.BLUE:
+            return BLUE_GOAL_POSITION
+        if self.target_goal == GoalColour.YELLOW:
+            return YELLOW_GOAL_POSITION
+        return None
+
+    def distance_to_target_goal(self, position):
+        goal_position = self.target_goal_position()
+        if position is None or goal_position is None:
+            return None
+
+        return math.hypot(
+            float(position[0]) - goal_position[0],
+            float(position[1]) - goal_position[1],
+        )
+
     def build_status_message(self):
         attack_request = None
         if self.pending_attack_request is not None:
@@ -272,7 +337,10 @@ class Robot():
             "see_ball": self.see_ball,
             "have_ball": self.have_ball,
             "ball_dist": self.communication_number(self.ball_dist),
-            "goal_dist": self.communication_number(self.goal_dist),
+            "position": self.communication_position(self.bot_position),
+            "position_std": self.communication_position(self.bot_position_std),
+            "localized": self.bot_localized,
+            "goal_dist": self.communication_number(self.localized_goal_dist),
             "own_goal_dist": self.communication_number(self.own_goal_dist),
             "attack_priority": self.has_attack_priority(),
             "attack_request": attack_request,
@@ -332,10 +400,10 @@ class Robot():
             self.send_attack_ack(sender, request)
             return
 
-        requester_goal_dist = request.get("goal_dist")
-        if requester_goal_dist is None or self.goal_dist is None:
+        requester_goal_dist = self.message_goal_dist(request)
+        if requester_goal_dist is None or self.localized_goal_dist is None:
             return
-        if requester_goal_dist > self.goal_dist:
+        if requester_goal_dist > self.localized_goal_dist:
             return
 
         self.send_attack_ack(sender, request)
@@ -465,7 +533,7 @@ class Robot():
                 return self_have
             return self._self_is_closer(self.ball_dist, status.get("ball_dist"))
 
-        return self._self_is_closer(self.goal_dist, status.get("goal_dist"))
+        return self._self_is_closer(self.localized_goal_dist, self.message_goal_dist(status))
 
     def should_accept_defence_request(self, request):
         if self.mode != RobotMode.OFFENCE or self.other_bot_status is None:
@@ -477,19 +545,19 @@ class Robot():
             self.pending_attack_request = None
             self.pending_attack_request_time = None
             return
-        if self.goal_dist is None or self.other_bot_status is None:
+        if self.localized_goal_dist is None or self.other_bot_status is None:
             return
         if self.other_bot_status.get("mode") != RobotMode.DEFENCE.name:
             self.pending_attack_request = None
             self.pending_attack_request_time = None
             return
 
-        other_goal_dist = self.other_bot_status.get("goal_dist")
+        other_goal_dist = self.message_goal_dist(self.other_bot_status)
         if other_goal_dist is None:
             return
 
         now = time.monotonic()
-        should_attack = self.goal_dist < other_goal_dist
+        should_attack = self.localized_goal_dist < other_goal_dist
         if not should_attack:
             self.pending_attack_request = None
             self.pending_attack_request_time = None
@@ -507,7 +575,8 @@ class Robot():
             "request_id": request_id,
             "requester": self.robot_id,
             "target_mode": RobotMode.OFFENCE.name,
-            "goal_dist": self.communication_number(self.goal_dist),
+            "position": self.communication_position(self.bot_position),
+            "goal_dist": self.communication_number(self.localized_goal_dist),
             "created_at": now,
         }
         self.pending_attack_request_time = now
@@ -517,7 +586,7 @@ class Robot():
             self.pending_defence_request = None
             self.pending_defence_request_time = None
             return
-        if self.goal_dist is None or self.other_bot_status is None:
+        if self.localized_goal_dist is None or self.other_bot_status is None:
             return
         if self.other_bot_status.get("mode") != RobotMode.OFFENCE.name:
             self.pending_defence_request = None
@@ -545,7 +614,8 @@ class Robot():
             "request_id": request_id,
             "requester": self.robot_id,
             "target_mode": RobotMode.DEFENCE.name,
-            "goal_dist": self.communication_number(self.goal_dist),
+            "position": self.communication_position(self.bot_position),
+            "goal_dist": self.communication_number(self.localized_goal_dist),
             "attack_priority": self_has_priority,
             "created_at": now,
         }
@@ -657,20 +727,22 @@ class Robot():
             if self.mode != previous_mode:
                 return
         # Stay near own goal
-        if self.own_goal_dir is not None and self.own_goal_dist is not None and abs(self.own_goal_dist - self.DEFENCE_GOAL_DIST) > 10:
+        if self.own_goal_dir is not None and self.localisation.get_position()[0] > self.DEFENCE_MAXIMUM_DISTANCE_FROM_WALL:
             # If ball is behind, try to swerve around it
             if self.see_ball and self.ball_dir is not None and abs(self.own_goal_dir - self.ball_dir) < 10:
                 self.ball_capture()
             else:
                 self.move_dir = self.own_goal_dir
                 self.move_spd = self.HEAD_TO_OWN_GOAL_SPD
-        else:
-            if self.see_ball:
+        elif self.own_goal_dir is not None and self.localisation.get_position()[0] < self.DEFENCE_MINIMUM_DISTANCE_FROM_WALL:
+            self.move_dir = 0
+            self.move_spd = 0.6
+        elif self.see_ball:
                 self.execute_goalie()
-            else:
-                # TODO: Stay centred
-                self.move_dir = 0
-                self.move_spd = 0
+        else:
+            # TODO: Move to block centre of goal after timeout
+            self.move_dir = 0
+            self.move_spd = 0
     
     def execute_goalie(self):
         if self.ball_dir < 10 and (180 - self.goal_dir) % 360 < self.GOALIE_MAX_ANGLE_FROM_GOAL:
@@ -788,7 +860,6 @@ class Robot():
 
 
     def is_ready_to_shoot(self):
-        print(self.goal_dir, self.goal_dist, self.own_goal_dir, self.own_goal_dist)
         return (
             self.have_ball
             and self.see_goal
@@ -818,6 +889,8 @@ class Robot():
             if abs(value) < self.REBOUND_SHOOT_PRECISION:
                 return True
         return False
+
+    # TODO: Use field position instead of lines
 
     def line_dist(self, field_angle):
         """Estimate distance (cm) to the nearest line along a field-absolute bearing."""

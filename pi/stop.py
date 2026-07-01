@@ -2,7 +2,7 @@ import struct
 
 import smbus2
 
-import lib.config as config
+from lib.config import Config
 
 
 SPEED_REGISTER = 0x12
@@ -10,6 +10,7 @@ BUS_NUMBER = 1
 
 
 def main():
+    config = Config()
     zero_speed = list(struct.pack("<i", 0))
     motors = config.get_value("motors", {})
 
