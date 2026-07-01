@@ -17,7 +17,7 @@ from lib.localisation import FIELD_X, FIELD_Y, Localisation
 from lib.switch import Switch
 from lib.tof import ToF
 
-USE_COMM_MODULE = True
+USE_COMM_MODULE = False
 USE_COMMUNICATION = False
 
 SOLENOID_PIN = board.D27
@@ -66,9 +66,9 @@ class Robot():
 
         # Constants
         ## General
-        self.BASE_BALL_CHASE_SPD = 0.1
+        self.BASE_BALL_CHASE_SPD = 0.2
         self.CLOSE_BALL_CHASE_SPD = 0.01
-        self.HEAD_TO_GOAL_SPD = 0.2
+        self.HEAD_TO_GOAL_SPD = 0.1
         self.HEAD_TO_OWN_GOAL_SPD = 0.1
         self.BALL_ORBIT_RADIUS = 14  # might be an arbitrary number
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
@@ -82,7 +82,7 @@ class Robot():
 
         self.GOALIE_MAX_ANGLE_FROM_GOAL = 15
 
-        self.DRIBBLER_ROT_SPD = -1.0
+        self.DRIBBLER_ROT_SPD = 1.0
         self.POSSESSION_ROT_SPD = 0.1
         self.SPIN_SHOT_SPEED = 0.4
 
@@ -648,7 +648,6 @@ class Robot():
         """Top-level state transitions"""
 
         ball_dir = self.ball_dir if self.ball_dir is not None else self.last_ball_dir
-
         if self.state == RobotState.NONE:
             self.state = RobotState.NO_SEE_BALL
 
@@ -1025,14 +1024,14 @@ class Robot():
 
             self.move_dir = math.degrees(math.atan2(move_vel_x, move_vel_y)) # Calculate direction of movement vector
             self.move_spd = math.sqrt(move_vel_x**2 + move_vel_y**2) # Calculate magnitude of movement vector
-            self.target_yaw = self.wrap_angle(self.ball_dir + self.bot_dir)
+            # self.target_yaw = self.wrap_angle(self.ball_dir + self.bot_dir)
 
             if ball_dist < 50 or self.have_ball:
                 self.dribble()
         else:
             self.dribble()
             self.move_dir = 0
-            self.move_spd = 0.8
+            self.move_spd = 0.3
     
     def try_to_find_centre(self):
         wall_dists = self.axis_wall_dists()
@@ -1062,6 +1061,7 @@ class Robot():
 
     def move(self):
         move_dir, move_spd = self.avoid_wall(self.move_dir, self.move_spd)
+        print(move_dir, move_spd, self.target_yaw, self.have_ball)
         self.drive.move(move_dir, move_spd, self.target_yaw, self.have_ball)
     
     def closest_wall(self):

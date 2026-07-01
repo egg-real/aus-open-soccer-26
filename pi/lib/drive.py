@@ -13,9 +13,10 @@ SMOOTHING_TIME = 0.10
 # CPU/I2C bus (e.g. localisation), which previously made yaw correction oscillate.
 DRIVE_LOOP_PERIOD = 0.005
 YAW_CORRECT_THRESHOLD = 3.0
-YAW_CORRECT_SPEED = 0.2
-POSSESSION_YAW_CORRECT_SPEED = 0.3
+YAW_CORRECT_SPEED = 0.4
+POSSESSION_YAW_CORRECT_SPEED = 0.1
 YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle yaw correction will be at the maximum speed.
+YAW_CORRECT_ACCELERATION = 0.1
 # Derivative (damping) term. The correction is otherwise pure-proportional, which
 # overshoots when the yaw feedback lags (e.g. IMU starved by I2C contention).
 # Subtracting a term proportional to how fast the error is closing damps that
@@ -67,7 +68,8 @@ class Drive:
         self.target_lock = threading.Lock()
         self.last_update_time = time.monotonic()
         self._last_yaw_error = 0.0
-        self._last_yaw_correct_time = None
+        self._last_yaw_correct_time = time.monotonic()
+        self._last_yaw_correct_speed = 0.0
         self.imu = imu if imu is not None else IMU()
         self.initial_yaw = capture_startup_yaw(self.imu)
         self.yaw = 0
@@ -117,16 +119,18 @@ class Drive:
 
     def _get_yaw_correction(self):
         now = time.monotonic()
-        dt = self.last_yaw_correct_time - now
-        self.last_yaw_correct_time = now
+        dt = now - self._last_yaw_correct_time
+        self._last_yaw_correct_time = now
         if not self._update_yaw():
-            self.last_yaw_correct_speed = 0
+            self._last_yaw_correct_speed = 0
             return 0
 
         with self.target_lock:
             target_rotation = self.target_rotation
-            if target_yaw_correct_speed > self.last_yaw_correct_speed:
-                self.last_yaw_correct_speed += dt * YAW_CORRECT_ACCELERATION
+            if self.target_yaw_correct_speed > self._last_yaw_correct_speed:
+                self._last_yaw_correct_speed += dt * YAW_CORRECT_ACCELERATION
+            else:
+                self._last_yaw_correct_speed = self.target_yaw_correct_speed
 
         yaw_error = wrap_angle(target_rotation - self.yaw)
 
@@ -138,9 +142,9 @@ class Drive:
                 derivative = wrap_angle(yaw_error - self._last_yaw_error) / dt
         self._last_yaw_error = yaw_error
         self._last_yaw_correct_time = now
-        self._last_yaw_correct_speed = 0
 
         if abs(yaw_error) <= YAW_CORRECT_THRESHOLD:
+            self._last_yaw_correct_speed = 0
             return 0
 
         # PD control, normalised so |P| = 1 at YAW_CORRECT_MAX_SPEED_THRESHOLD.
@@ -148,8 +152,8 @@ class Drive:
         d_term = YAW_CORRECT_KD * derivative / YAW_CORRECT_MAX_SPEED_THRESHOLD
         return clamp(
             (p_term + d_term) * self._last_yaw_correct_speed,
-            -yaw_correct_speed,
-            yaw_correct_speed,
+            -YAW_CORRECT_SPEED,
+            YAW_CORRECT_SPEED
         )
 
     def _update_yaw(self):
