@@ -218,3 +218,5 @@ __marimo__/
 
 # Network configuration for MaixCam (WE are not leaking our passwords)
 wpa_supplicant.conf
+
+main.txt
