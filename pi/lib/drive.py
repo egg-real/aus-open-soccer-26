@@ -116,25 +116,29 @@ class Drive:
                 time.sleep(DRIVE_LOOP_PERIOD - elapsed)
 
     def _get_yaw_correction(self):
+        now = time.monotonic()
+        dt = self.last_yaw_correct_time - now
+        self.last_yaw_correct_time = now
         if not self._update_yaw():
+            self.last_yaw_correct_speed = 0
             return 0
 
         with self.target_lock:
             target_rotation = self.target_rotation
-            yaw_correct_speed = self.target_yaw_correct_speed
+            if target_yaw_correct_speed > self.last_yaw_correct_speed:
+                self.last_yaw_correct_speed += dt * YAW_CORRECT_ACCELERATION
 
         yaw_error = wrap_angle(target_rotation - self.yaw)
 
-        now = time.monotonic()
         derivative = 0.0
         if self._last_yaw_correct_time is not None:
-            dt = now - self._last_yaw_correct_time
             if 0.0 < dt <= YAW_CORRECT_MAX_DT:
                 # Rate of change of the error (deg/s). wrap_angle keeps the
                 # difference on the short arc across the +/-180 seam.
                 derivative = wrap_angle(yaw_error - self._last_yaw_error) / dt
         self._last_yaw_error = yaw_error
         self._last_yaw_correct_time = now
+        self._last_yaw_correct_speed = 0
 
         if abs(yaw_error) <= YAW_CORRECT_THRESHOLD:
             return 0
@@ -143,7 +147,7 @@ class Drive:
         p_term = yaw_error / YAW_CORRECT_MAX_SPEED_THRESHOLD
         d_term = YAW_CORRECT_KD * derivative / YAW_CORRECT_MAX_SPEED_THRESHOLD
         return clamp(
-            (p_term + d_term) * yaw_correct_speed,
+            (p_term + d_term) * self._last_yaw_correct_speed,
             -yaw_correct_speed,
             yaw_correct_speed,
         )
