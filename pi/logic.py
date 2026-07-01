@@ -712,45 +712,61 @@ class Robot():
 
         elif self.state == RobotState.NONE:
             pass
+    
 
+    # Defence Logic
     def execute_defence(self):
+        self.target_yaw = self.to_absolute_dir(self.ball_dir)
+
         # If ball very close, turn to attack mode
-        if self.have_ball or (self.see_ball and self.ball_dist is not None and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST):
+        if self.have_ball or (
+            self.see_ball 
+            and self.ball_dist is not None
+            and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST
+            and (abs(self.to_absolute_dir(self.ball_dir)) < 120 or self.own_goal_dist > 80) # Ball not too behind or not too close to goal (reduce risk of own goaling)
+            ):
+
             previous_mode = self.mode
             self.request_mode_change(RobotMode.OFFENCE)
             if self.mode != previous_mode:
                 return
-        # Stay near own goal
-        if self.own_goal_dir is not None and self.localisation.get_position()[0] > self.DEFENCE_MAXIMUM_DISTANCE_FROM_WALL:
-            # If ball is behind, try to swerve around it
-            if self.see_ball and self.ball_dir is not None and abs(self.own_goal_dir - self.ball_dir) < 10:
+
+        # Stay near own goal if too far away from it
+        elif self.own_goal_dir is not None and self.own_goal_dist is not None and abs(self.own_goal_dist - self.DEFENCE_GOAL_DIST) > 10:
+            # If ball is behind, try to swerve around it (may trigger attack handover request anyway)
+            if self.see_ball and self.ball_dir is not None and abs(self.wrap_angle(self.own_goal_dir - self.ball_dir)) < 20:
                 self.ball_capture()
             else:
                 self.move_dir = self.own_goal_dir
                 self.move_spd = self.HEAD_TO_OWN_GOAL_SPD
-        elif self.own_goal_dir is not None and self.localisation.get_position()[0] < self.DEFENCE_MINIMUM_DISTANCE_FROM_WALL:
-            self.move_dir = 0
-            self.move_spd = 0.6
-        elif self.see_ball:
-                self.execute_goalie()
         else:
-            # TODO: Move to block centre of goal after timeout
-            self.move_dir = 0
-            self.move_spd = 0
+            if self.see_ball:
+                self.execute_goalie()
+            else:
+                # TODO: Stay centred
+                self.move_dir = 0
+                self.move_spd = 0
     
     def execute_goalie(self):
-        if self.ball_dir < 10 and (180 - self.goal_dir) % 360 < self.GOALIE_MAX_ANGLE_FROM_GOAL:
-            self.move_dir = 270
+        inline_angle = abs(self.own_goal_dir - self.ball_dir) - 180
+        if abs(inline_angle) > 30:
+            self.move_dir = 90 + np.sign(inline_angle) * 90
             self.move_spd = 1.0
-        elif self.ball_dir > 10 and (180 - self.goal_dir) % 360 > -self.GOALIE_MAX_ANGLE_FROM_GOAL:
-            self.move_dir = 90
-            self.move_spd = 1.0
-        else:
-            self.move_dir = 0
-            self.move_spd = 1.0
-        self.target_yaw = self.wrap_angle(self.bot_dir + self.ball_dir)
+        self.target_yaw = self.to_absolute_dir(self.ball_dir)
 
-    # Possession logic
+        # if self.ball_dir < 10 and (180 - self.goal_dir) % 360 < self.GOALIE_MAX_ANGLE_FROM_GOAL:
+        #     self.move_dir = 270
+        #     self.move_spd = 1.0
+        # elif self.ball_dir > 10 and (180 - self.goal_dir) % 360 > -self.GOALIE_MAX_ANGLE_FROM_GOAL:
+        #     self.move_dir = 90
+        #     self.move_spd = 1.0
+        # else:
+        #     self.move_dir = 0
+        #     self.move_spd = 1.0
+        # self.target_yaw = self.wrap_angle(self.bot_dir + self.ball_dir)
+
+
+    # Possession Logic
     def update_possession_state(self):
         """Possession sub-state transitions while the bot has the ball."""
         if not self.have_ball:
