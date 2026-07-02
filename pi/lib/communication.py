@@ -1,5 +1,3 @@
-"""Small socket-based robot communication helper."""
-
 import json
 import socket
 import threading
@@ -7,10 +5,14 @@ import time
 from typing import Any, Callable
 
 
-DEFAULT_BROKER = "localhost"
-DEFAULT_PORT = 8765
+DEFAULT_BROKER = "255.255.255.255"
+DEFAULT_PORT = 1883
 DEFAULT_TOPIC = "soccer/pi/messages"
 DEFAULT_REPLY_TOPIC = "soccer/pi/replies"
+DEFAULT_BIND_HOST = "0.0.0.0"
+DEFAULT_HEARTBEAT_INTERVAL_S = 0.25
+DEFAULT_PEER_TIMEOUT_S = 1.0
+DEFAULT_SOCKET_TIMEOUT_S = 0.02
 
 MessageCallback = Callable[[dict[str, Any], str], None]
 ReplyCallback = Callable[[dict[str, Any], str], None]
@@ -19,31 +21,68 @@ ReplyCallback = Callable[[dict[str, Any], str], None]
 class Communication:
     def __init__(
         self,
-        host: bool | str = True,
-        hostname: str | None = None,
+        broker: str = DEFAULT_BROKER,
         port: int = DEFAULT_PORT,
         topic: str = DEFAULT_TOPIC,
         reply_topic: str = DEFAULT_REPLY_TOPIC,
         client_id: str | None = None,
-        broker: str | None = None,
-        **_ignored: Any,
+        bind_host: str = DEFAULT_BIND_HOST,
+        bind_port: int | None = None,
+        peer_port: int | None = None,
+        heartbeat_interval_s: float = DEFAULT_HEARTBEAT_INTERVAL_S,
+        peer_timeout_s: float = DEFAULT_PEER_TIMEOUT_S,
     ) -> None:
-        self.host = host
-        self.hostname = hostname or broker or DEFAULT_BROKER
+        self.broker = broker
         self.port = port
         self.topic = topic
         self.reply_topic = reply_topic
         self.client_id = client_id or f"pi-{socket.gethostname()}"
+        self.bind_host = bind_host
+        self.bind_port = bind_port or port
+        self.peer_port = peer_port or port
+        self.heartbeat_interval_s = heartbeat_interval_s
+        self.peer_timeout_s = peer_timeout_s
 
         self.on_message: MessageCallback | None = None
         self.on_reply: ReplyCallback | None = None
 
-        self._stop_event = threading.Event()
-        self._connected_event = threading.Event()
-        self._thread: threading.Thread | None = None
+        self.peer_alive = False
+        self.last_seen: float | None = None
+
         self._socket: socket.socket | None = None
-        self._listener: socket.socket | None = None
-        self._send_lock = threading.Lock()
+        self._peer_addr: tuple[str, int] | None = None
+        self._session_id = f"{self.client_id}-{time.time_ns()}"
+        self._seq = 0
+        self._last_peer_seq: dict[tuple[str, str], int] = {}
+        self._running = threading.Event()
+        self._lock = threading.Lock()
+        self._receive_thread: threading.Thread | None = None
+        self._heartbeat_thread: threading.Thread | None = None
+
+    def _open_socket(self) -> None:
+        if self._socket is not None:
+            return
+
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        udp_socket.settimeout(DEFAULT_SOCKET_TIMEOUT_S)
+        udp_socket.bind((self.bind_host, self.bind_port))
+        self._socket = udp_socket
+
+    def _target_addr(self) -> tuple[str, int]:
+        with self._lock:
+            if self._peer_addr is not None:
+                return self._peer_addr
+        return (self.broker, self.peer_port)
+
+    def _next_seq(self) -> int:
+        with self._lock:
+            self._seq += 1
+            return self._seq
+
+    def _encode(self, payload: dict[str, Any]) -> bytes:
+        return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
     @staticmethod
     def decode_payload(payload: bytes) -> dict[str, Any]:
@@ -57,209 +96,164 @@ class Communication:
             return decoded
         return {"message": decoded}
 
-    def build_payload(self, message: Any, reply_topic: str | None = None, kind: str = "message") -> dict[str, Any]:
+    def build_payload(self, message: Any, reply_topic: str | None = None, topic: str | None = None) -> dict[str, Any]:
         return {
-            "kind": kind,
             "sender": self.client_id,
+            "session_id": self._session_id,
             "message": message,
+            "topic": topic or self.topic,
             "reply_topic": reply_topic or self.reply_topic,
+            "seq": self._next_seq(),
             "sent_at": time.time(),
         }
 
-    def _encode(self, payload: dict[str, Any]) -> bytes:
-        return json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
-
-    def _close_socket(self, sock: socket.socket | None) -> None:
-        if sock is None:
-            return
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
-            sock.close()
-        except OSError:
-            pass
-
-    def _send_payload(self, payload: dict[str, Any]) -> bool:
-        sock = self._socket
-        if sock is None:
-            return False
-
-        data = self._encode(payload)
-        with self._send_lock:
-            try:
-                sock.sendall(data)
-            except OSError:
-                return False
-        return True
-
-    def _handle_packet(self, payload: dict[str, Any]) -> None:
-        topic = payload.get("reply_topic") or payload.get("topic") or self.topic
-        if payload.get("kind") == "reply":
-            if self.on_reply is not None:
-                self.on_reply(payload, topic)
-            return
-
-        if self.on_message is not None:
-            self.on_message(payload, topic)
-
-    def _recv_loop(self, sock: socket.socket) -> None:
-        buffer = bytearray()
-        sock.settimeout(0.5)
-
-        while not self._stop_event.is_set():
-            try:
-                chunk = sock.recv(4096)
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-
-            if not chunk:
-                break
-
-            buffer.extend(chunk)
-            while True:
-                newline = buffer.find(b"\n")
-                if newline < 0:
-                    break
-
-                line = bytes(buffer[:newline])
-                del buffer[:newline + 1]
-                if not line:
-                    continue
-
-                self._handle_packet(self.decode_payload(line))
-
-    def _serve(self) -> None:
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener = listener
-        try:
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            listener.bind(("0.0.0.0", self.port))
-            listener.listen(1)
-            listener.settimeout(0.5)
-            print(f"Listening on 0.0.0.0:{self.port}")
-
-            while not self._stop_event.is_set():
-                try:
-                    conn, address = listener.accept()
-                except socket.timeout:
-                    continue
-                except OSError:
-                    break
-
-                print(f"Connected from {address[0]}:{address[1]}")
-                self._socket = conn
-                self._connected_event.set()
-                try:
-                    self._recv_loop(conn)
-                finally:
-                    self._connected_event.clear()
-                    self._close_socket(conn)
-                    if self._socket is conn:
-                        self._socket = None
-        finally:
-            self._close_socket(listener)
-            self._listener = None
-
-    def _connect_once(self, hostname: str) -> socket.socket | None:
-        try:
-            address_info = socket.getaddrinfo(hostname, self.port, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        except OSError:
-            return None
-
-        for family, socktype, proto, _, address in address_info:
-            sock = None
-            try:
-                sock = socket.socket(family, socktype, proto)
-                sock.settimeout(1.0)
-                sock.connect(address)
-                sock.settimeout(None)
-                return sock
-            except OSError:
-                self._close_socket(sock)
-                continue
-
-        return None
-
-    def _search_and_connect(self) -> None:
-        hostname = self.hostname
-        print(f"Searching for {hostname}:{self.port}")
-
-        while not self._stop_event.is_set():
-            sock = self._connect_once(hostname)
-            if sock is None:
-                time.sleep(1.0)
-                continue
-
-            print(f"Connected to {hostname}:{self.port}")
-            self._socket = sock
-            self._connected_event.set()
-            try:
-                self._recv_loop(sock)
-            finally:
-                self._connected_event.clear()
-                self._close_socket(sock)
-                if self._socket is sock:
-                    self._socket = None
-
-            if not self._stop_event.is_set():
-                time.sleep(1.0)
-
     def connect(self) -> None:
-        if self._thread is None:
-            self.start()
-        self._connected_event.wait(timeout=5.0)
+        self._open_socket()
+
+    def start(self) -> None:
+        self.connect()
+        if self._running.is_set():
+            return
+
+        self._running.set()
+        self._receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._receive_thread.start()
+        self._heartbeat_thread.start()
+
+    def stop(self) -> None:
+        self._running.clear()
+
+        for worker in (self._receive_thread, self._heartbeat_thread):
+            if worker is not None and worker.is_alive():
+                worker.join(timeout=0.5)
+
+        if self._socket is not None:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
+            self._socket = None
+
+        self._receive_thread = None
+        self._heartbeat_thread = None
+        self.peer_alive = False
 
     def loop_forever(self) -> None:
         self.start()
         try:
-            while not self._stop_event.is_set():
-                time.sleep(0.5)
+            while True:
+                time.sleep(1)
         except KeyboardInterrupt:
             self.stop()
 
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
+    def send(self, message: Any, topic: str | None = None, reply_topic: str | None = None) -> None:
+        payload = self.build_payload(message, reply_topic, topic)
+        self._send_payload(payload)
+
+    def send_and_wait(self, message: Any, topic: str | None = None, reply_topic: str | None = None) -> None:
+        self.send(message, topic, reply_topic)
+
+    def reply(self, message: Any, topic: str | None = None) -> None:
+        payload = {
+            "sender": self.client_id,
+            "session_id": self._session_id,
+            "message": message,
+            "topic": topic or self.reply_topic,
+            "seq": self._next_seq(),
+            "received_at": time.time(),
+        }
+        self._send_payload(payload)
+
+    def _send_payload(self, payload: dict[str, Any], broadcast: bool = False) -> None:
+        if self._socket is None:
+            self.connect()
+        if self._socket is None:
             return
 
-        self._stop_event.clear()
-        self._connected_event.clear()
+        target = (self.broker, self.peer_port) if broadcast else self._target_addr()
+        try:
+            self._socket.sendto(self._encode(payload), target)
+        except OSError:
+            pass
 
-        if self.host is True:
-            target = self._serve
-        else:
-            target = self._search_and_connect
+    def _heartbeat_loop(self) -> None:
+        while self._running.is_set():
+            self._send_heartbeat()
+            self._update_peer_alive()
+            time.sleep(self.heartbeat_interval_s)
 
-        self._thread = threading.Thread(target=target, daemon=True)
-        self._thread.start()
+    def _send_heartbeat(self) -> None:
+        payload = {
+            "sender": self.client_id,
+            "session_id": self._session_id,
+            "message": {"type": "heartbeat"},
+            "topic": self.topic,
+            "seq": self._next_seq(),
+            "sent_at": time.time(),
+            "heartbeat": True,
+        }
+        self._send_payload(payload, broadcast=True)
 
-    def stop(self) -> None:
-        self._stop_event.set()
-        self._connected_event.clear()
-        self._close_socket(self._socket)
-        self._close_socket(self._listener)
-        self._socket = None
-        self._listener = None
+    def _update_peer_alive(self) -> None:
+        if self.last_seen is None:
+            self.peer_alive = False
+            return
+        self.peer_alive = time.monotonic() - self.last_seen <= self.peer_timeout_s
 
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=1.0)
+    def _receive_loop(self) -> None:
+        while self._running.is_set():
+            if self._socket is None:
+                time.sleep(DEFAULT_SOCKET_TIMEOUT_S)
+                continue
 
-    def send(self, message: Any, topic: str | None = None, reply_topic: str | None = None) -> bool:
-        payload = self.build_payload(message, reply_topic, kind="message")
-        if topic is not None:
-            payload["topic"] = topic
-        return self._send_payload(payload)
+            try:
+                packet, addr = self._socket.recvfrom(65535)
+            except socket.timeout:
+                self._update_peer_alive()
+                continue
+            except OSError:
+                if self._running.is_set():
+                    time.sleep(DEFAULT_SOCKET_TIMEOUT_S)
+                continue
 
-    def send_and_wait(self, message: Any, topic: str | None = None, reply_topic: str | None = None) -> bool:
-        self._connected_event.wait(timeout=5.0)
-        return self.send(message, topic, reply_topic)
+            payload = self.decode_payload(packet)
+            if not self._should_accept(payload, addr):
+                continue
 
-    def reply(self, message: Any, topic: str | None = None) -> bool:
-        payload = self.build_payload(message, topic, kind="reply")
-        if topic is not None:
-            payload["topic"] = topic
-        return self._send_payload(payload)
+            self._learn_peer(addr)
+            self.last_seen = time.monotonic()
+            self.peer_alive = True
+
+            if payload.get("heartbeat"):
+                continue
+
+            topic = str(payload.get("topic", self.topic))
+            callback = self.on_reply if topic == self.reply_topic else self.on_message
+            if callback is not None:
+                try:
+                    callback(payload, topic)
+                except Exception:
+                    pass
+
+    def _should_accept(self, payload: dict[str, Any], addr: tuple[str, int]) -> bool:
+        sender = payload.get("sender")
+        if not isinstance(sender, str) or sender == self.client_id:
+            return False
+
+        seq = payload.get("seq")
+        session_id = payload.get("session_id")
+        if isinstance(seq, int):
+            if not isinstance(session_id, str):
+                session_id = ""
+            peer_key = (sender, session_id)
+            previous_seq = self._last_peer_seq.get(peer_key, 0)
+            if seq <= previous_seq:
+                return False
+            self._last_peer_seq[peer_key] = seq
+
+        return True
+
+    def _learn_peer(self, addr: tuple[str, int]) -> None:
+        with self._lock:
+            self._peer_addr = addr

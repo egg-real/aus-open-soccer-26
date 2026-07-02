@@ -6,7 +6,7 @@ from lib.config import Config
 from lib.imu import IMU
 from math import radians, sin
 
-SMOOTHING_TIME = 0.10
+MAX_VELOCITY_CHANGE_PER_SEC = 10.0  # Max change in the (dx, dy) speed vector, per second.
 # Fixed drive-loop period. The yaw correction is a proportional controller, so
 # a stable, high update rate keeps it from overshooting. Pacing the loop (rather
 # than free-running) also stops it from starving other threads that share the
@@ -35,6 +35,8 @@ def clamp(value, minimum, maximum):
 
 def wrap_angle(theta):
     """Input an angle in degrees. Returns same angle but in [-180, 180)."""
+    if theta is None:
+        return None
     return (theta + 180) % 360 - 180
 
 def capture_startup_yaw(imu:IMU, sample_count=25, sample_interval=0.02):
@@ -179,9 +181,18 @@ class Drive:
         dt = now - self.last_update_time
         self.last_update_time = now
 
-        alpha = min(dt / SMOOTHING_TIME, 1.0)
-        new_dx = dx + (target_dx - dx) * alpha
-        new_dy = dy + (target_dy - dy) * alpha
+        delta_dx = target_dx - dx
+        delta_dy = target_dy - dy
+        delta_magnitude = math.hypot(delta_dx, delta_dy)
+
+        max_step = MAX_VELOCITY_CHANGE_PER_SEC * dt
+        if delta_magnitude > max_step and delta_magnitude > 0:
+            scale = max_step / delta_magnitude
+            delta_dx *= scale
+            delta_dy *= scale
+
+        new_dx = dx + delta_dx
+        new_dy = dy + delta_dy
 
         self.current_direction = math.degrees(math.atan2(new_dy, new_dx))
         self.current_speed = math.hypot(new_dx, new_dy)

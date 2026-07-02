@@ -17,7 +17,7 @@ from lib.localisation import FIELD_X, FIELD_Y, Localisation
 from lib.switch import Switch
 from lib.tof import ToF
 
-USE_COMM_MODULE = False
+USE_COMM_MODULE = True
 USE_COMMUNICATION = False
 
 SOLENOID_PIN = board.D27
@@ -66,7 +66,7 @@ class Robot():
 
         # Constants
         ## General
-        self.BASE_BALL_CHASE_SPD = 0.2
+        self.BASE_BALL_CHASE_SPD = 0.1
         self.CLOSE_BALL_CHASE_SPD = 0.01
         self.HEAD_TO_GOAL_SPD = 0.1
         self.HEAD_TO_OWN_GOAL_SPD = 0.1
@@ -81,6 +81,7 @@ class Robot():
         self.REBOUND_SHOOT_PRECISION = 0.5 # Somewhere inbetween 0 and 2, lower the more precise
 
         self.GOALIE_MAX_ANGLE_FROM_GOAL = 15
+        self.DEFENCE_GOAL_DIST = 100
 
         self.DRIBBLER_ROT_SPD = 1.0
         self.POSSESSION_ROT_SPD = 0.1
@@ -239,19 +240,21 @@ class Robot():
         if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
 
+        if self.pause_switch.read() or (USE_COMM_MODULE and not self.comm_module.read()):
+            self.drive.stop()
+            self.stop_dribbler()
+            return
+
         # State machine
         self.execute_behaviour()
 
-        if self.pause_switch.read() or (USE_COMM_MODULE and not self.comm_module.read()):
-            self.drive.stop()
-        else:
-            if USE_COMMUNICATION:
-                self.maybe_request_attack_handoff()
-                self.maybe_request_defence_handoff()
-                self.communication.send(self.build_status_message())
+        if USE_COMMUNICATION:
+            self.maybe_request_attack_handoff()
+            self.maybe_request_defence_handoff()
+            self.communication.send(self.build_status_message())
 
-            # Execute movement
-            self.move()
+        # Execute movement
+        self.move()
 
 
     # ------ Bot Communication ------ #
@@ -697,8 +700,10 @@ class Robot():
     def execute_offence(self):
         # State transitions for offence
         if self.state == RobotState.NO_SEE_BALL:
-            self.move_dir = 0
-            self.move_spd = 0
+            self.try_to_find_centre()
+
+        elif self.state == RobotState.CLUELESS:
+            self.try_to_find_centre()
 
         elif self.state == RobotState.CHASING_BALL:
             self.ball_capture()
@@ -716,13 +721,18 @@ class Robot():
     # Defence Logic
     def execute_defence(self):
         self.target_yaw = self.to_absolute_dir(self.ball_dir)
+        if self.target_yaw is None:
+            self.target_yaw = 0
 
         # If ball very close, turn to attack mode
         if self.have_ball or (
             self.see_ball 
             and self.ball_dist is not None
             and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST
-            and (abs(self.to_absolute_dir(self.ball_dir)) < 120 or self.own_goal_dist > 80) # Ball not too behind or not too close to goal (reduce risk of own goaling)
+            and (
+                abs(self.wrap_angle(self.to_absolute_dir(self.ball_dir))) < 120
+                or (self.own_goal_dist is not None and self.own_goal_dist > 80)
+            ) # Ball not too behind or not too close to goal (reduce risk of own goaling)
             ):
 
             previous_mode = self.mode
@@ -740,17 +750,23 @@ class Robot():
                 self.move_spd = self.HEAD_TO_OWN_GOAL_SPD
         else:
             if self.see_ball:
-                self.execute_goalie()
+                if self.own_goal_dir is not None:
+                    self.execute_goalie()
+                else:
+                    self.ball_capture()
             else:
                 # TODO: Stay centred
                 self.move_dir = 0
                 self.move_spd = 0
     
     def execute_goalie(self):
-        inline_angle = abs(self.own_goal_dir - self.ball_dir) - 180
-        if abs(inline_angle) > 30:
-            self.move_dir = 90 + np.sign(inline_angle) * 90
+        inline_error = self.wrap_angle(self.own_goal_dir - self.ball_dir - 180)
+        if abs(inline_error) > 30:
+            self.move_dir = 90 + np.sign(inline_error) * 90
             self.move_spd = 1.0
+        else:
+            self.move_dir = 0
+            self.move_spd = 0
         self.target_yaw = self.to_absolute_dir(self.ball_dir)
 
         # if self.ball_dir < 10 and (180 - self.goal_dir) % 360 < self.GOALIE_MAX_ANGLE_FROM_GOAL:
@@ -812,11 +828,12 @@ class Robot():
                 # orbiting the ball toward target_yaw, and is_ready_to_shoot kicks.
                 self.move_dir = self.goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
-                self.target_yaw = self.goal_dir
+                self.target_yaw = self.to_absolute_dir(self.goal_dir)
             elif self.see_own_goal and self.own_goal_dir is not None:
-                self.move_dir = -(self.own_goal_dir + 180) % 360
+                away_from_own_goal_dir = self.wrap_angle(self.own_goal_dir + 180)
+                self.move_dir = away_from_own_goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
-                self.target_yaw = -(self.own_goal_dir + 180) % 360
+                self.target_yaw = self.to_absolute_dir(away_from_own_goal_dir)
             else:
                 self.try_to_find_centre()
 
@@ -1031,31 +1048,34 @@ class Robot():
         else:
             self.dribble()
             self.move_dir = 0
-            self.move_spd = 0.3
+            self.move_spd = 0.05
     
     def try_to_find_centre(self):
-        wall_dists = self.axis_wall_dists()
-        dist_N = wall_dists["N"]
-        dist_E = wall_dists["E"]
-        dist_S = wall_dists["S"]
-        dist_W = wall_dists["W"]
+        if self.bot_position is None:
+            self.move_dir = 0
+            self.move_spd = 0
+            return
 
-        INF = 1e6
-        dist_N = INF if dist_N is None else dist_N
-        dist_E = INF if dist_E is None else dist_E
-        dist_S = INF if dist_S is None else dist_S
-        dist_W = INF if dist_W is None else dist_W
-        eps = 1e-6
+        x, y = self.bot_position
+        if x is None or y is None:
+            self.move_dir = 0
+            self.move_spd = 0
+            return
 
-        # Move away from nearby walls.
-        wx = (1.0 / (dist_W + eps)) - (1.0 / (dist_E + eps))
-        wy = (1.0 / (dist_S + eps)) - (1.0 / (dist_N + eps))
+        centre_x = FIELD_X / 2.0
+        centre_y = FIELD_Y / 2.0
+        dx = centre_x - float(x)
+        dy = centre_y - float(y)
+        dist_mm = math.hypot(dx, dy)
 
-        # convert to vector
-        mag = math.hypot(wx, wy)
+        if dist_mm < 100:
+            self.move_dir = 0
+            self.move_spd = 0
+            return
 
-        self.move_dir = math.degrees(math.atan2(wx, wy))
-        self.move_spd = min(1, mag * 40)
+        absolute_dir = math.degrees(math.atan2(dx, dy))
+        self.move_dir = self.to_relative_dir(absolute_dir)
+        self.move_spd = min(self.HEAD_TO_GOAL_SPD, max(0.03, dist_mm / 1000.0 * self.HEAD_TO_GOAL_SPD))
 
     # ------ Action Functions ------ #
 
@@ -1156,10 +1176,14 @@ class Robot():
 
     def to_absolute_dir(self, relative_dir):
         """Input a direction relative to the bot orientation\nReturns a direction that ignores bot orientation"""
+        if relative_dir is None:
+            return None
         return relative_dir + self.bot_dir
 
     def to_relative_dir(self, absolute_dir):
         """Input a direction that ignores bot orientation\nReturns a direction relative to the bot orientation"""
+        if absolute_dir is None:
+            return None
         return absolute_dir - self.bot_dir
 
     def angle_towards(self, bot_x, bot_y, obj_x, obj_y):

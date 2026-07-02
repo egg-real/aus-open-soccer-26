@@ -18,7 +18,7 @@ FIELD_Y = 2430.0
 TOF_BODY_ANGLES_DEG = np.array([0.0, 90.0, 180.0, 270.0])
 # Forward offset of each sensor from the robot centre along its own beam (mm).
 # Distance read = (distance from centre to wall) - offset. Tune per build.
-TOF_MOUNTING_OFFSET_MM = np.array([0.0, 0.0, 0.0, 0.0])
+TOF_MOUNTING_OFFSET_MM = np.array([55, 55, 55, 55])
 
 # ----- Sensor model ----- #
 SIGMA_TOF_MM = 40.0            # Std dev of a good wall return.
@@ -51,7 +51,7 @@ SLIP_NOISE_SCALE_MAX = 6.0       # Cap on the process-noise multiplier.
 SLIP_DECAY = 0.85
 
 # ----- Particle filter ----- #
-NUM_PARTICLES = 500
+NUM_PARTICLES = 1000
 RESAMPLE_THRESHOLD_RATIO = 0.5  # Resample when N_eff < ratio * N.
 # Startup cloud spread, per axis. Robots begin lined up vertically (along y),
 # so the North/South ToFs (which give y) are occluded by neighbouring robots and
@@ -115,6 +115,8 @@ class Localisation:
         self._slip_scale = 1.0
 
         self._last_time = time.monotonic()
+        self._fps_count = 0
+        self._fps_window_start = time.monotonic()
 
         self._thread = threading.Thread(target=self._update_loop, daemon=True)
         self._thread.start()
@@ -402,6 +404,13 @@ class Localisation:
             elapsed = time.monotonic() - loop_start
             if elapsed < LOOP_PERIOD_S:
                 time.sleep(LOOP_PERIOD_S - elapsed)
+
+            self._fps_count += 1
+            fps_window = time.monotonic() - self._fps_window_start
+            if fps_window >= 1.0:
+                print(f"localisation fps: {self._fps_count / fps_window:.1f}")
+                self._fps_count = 0
+                self._fps_window_start = time.monotonic()
 
     # ------ Public API ------ #
     def get_position(self):
