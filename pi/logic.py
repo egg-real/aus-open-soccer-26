@@ -83,8 +83,8 @@ class Robot():
         self.READY_TO_REBOUND_SHOOT_DISTANCE = 50
         self.REBOUND_SHOOT_PRECISION = 0.5 # Somewhere inbetween 0 and 2, lower the more precise
 
-        self.GOALIE_MAX_ANGLE_FROM_GOAL = 15
-        self.DEFENCE_GOAL_DIST = 80
+        self.GOALIE_MAX_ANGLE_FROM_GOAL = 15  # degrees, max angle (from goal) the goalie will shift laterally to track the ball
+        self.DEFENCE_GOAL_DIST = 80  # cm, fixed standing distance in front of the own goal (via localisation)
 
         ## Wall boundary safety (hard floor near a wall, via localisation)
         self.MIN_DIST_FROM_FRONT_WALL = 50  # cm, never get closer than this to whichever wall the bot's front currently faces
@@ -341,6 +341,70 @@ class Robot():
             float(position[0]) - goal_position[0],
             float(position[1]) - goal_position[1],
         )
+
+    def own_goal_position(self):
+        if self.target_goal == GoalColour.BLUE:
+            return YELLOW_GOAL_POSITION
+        if self.target_goal == GoalColour.YELLOW:
+            return BLUE_GOAL_POSITION
+        return None
+
+    def distance_to_own_goal(self, position):
+        goal_position = self.own_goal_position()
+        if position is None or goal_position is None:
+            return None
+
+        return math.hypot(
+            float(position[0]) - goal_position[0],
+            float(position[1]) - goal_position[1],
+        )
+
+    def own_goal_localised_dist(self):
+        """Distance (cm) from the localised bot position to the own goal."""
+        dist_mm = self.distance_to_own_goal(self.bot_position)
+        if dist_mm is None:
+            return None
+        return dist_mm / 10.0
+
+    def ball_field_position(self):
+        """Estimated field position (mm) of the ball, combining the localised
+        bot position with the camera-relative ball bearing/distance."""
+        if self.bot_position is None or self.ball_dir is None or self.ball_dist is None:
+            return None
+
+        bx, by = self.bot_position
+        if bx is None or by is None:
+            return None
+
+        absolute_dir = self.to_absolute_dir(self.ball_dir)
+        if absolute_dir is None:
+            return None
+
+        rad = math.radians(absolute_dir)
+        ball_dist_mm = self.ball_dist * 10.0  # camera distances are in cm
+        return float(bx) + ball_dist_mm * math.sin(rad), float(by) + ball_dist_mm * math.cos(rad)
+
+    def goalie_target_position(self):
+        """Desired standing spot for the goalie: a fixed distance
+        (DEFENCE_GOAL_DIST, cm) in front of the own goal, shifted side-to-side
+        to track the ball but clamped to within GOALIE_MAX_ANGLE_FROM_GOAL
+        degrees of the goal's centre line (both measured via localisation)."""
+        own_position = self.own_goal_position()
+        if own_position is None:
+            return None
+        own_x, own_y = own_position
+
+        into_field = 1.0 if own_x <= FIELD_X / 2.0 else -1.0
+        stand_dist_mm = self.DEFENCE_GOAL_DIST * 10.0
+        stand_x = own_x + into_field * stand_dist_mm
+
+        max_lateral_mm = stand_dist_mm * math.tan(math.radians(self.GOALIE_MAX_ANGLE_FROM_GOAL))
+
+        ball_position = self.ball_field_position()
+        desired_y = ball_position[1] if ball_position is not None else own_y
+        desired_y = min(max(desired_y, own_y - max_lateral_mm), own_y + max_lateral_mm)
+
+        return stand_x, desired_y
 
     def build_status_message(self):
         attack_request = None
@@ -718,7 +782,7 @@ class Robot():
 
         elif self.state == RobotState.HAVE_BALL:
             if not self.have_ball:  # Lost possession
-                self.state = RobotState.CHASING_BALL
+                self.state = RobotState.LINING_UP
                 self.possession_state = PossessionState.NONE
                 return
             self.update_possession_state()
@@ -750,6 +814,8 @@ class Robot():
         if self.target_yaw is None:
             self.target_yaw = 0
 
+        own_goal_dist_localised = self.own_goal_localised_dist()
+
         # If ball very close, turn to attack mode
         if self.have_ball or (
             self.see_ball 
@@ -757,7 +823,7 @@ class Robot():
             and self.ball_dist < self.TURN_TO_OFFENCE_BALL_DIST
             and (
                 abs(self.wrap_angle(self.to_absolute_dir(self.ball_dir))) < 120
-                or (self.own_goal_dist is not None and self.own_goal_dist > 80)
+                or (own_goal_dist_localised is not None and own_goal_dist_localised > 80)
             ) # Ball not too behind or not too close to goal (reduce risk of own goaling)
             ):
 
@@ -766,45 +832,52 @@ class Robot():
             if self.mode != previous_mode:
                 return
 
-        # Stay near own goal if too far away from it
-        elif self.own_goal_dir is not None and self.own_goal_dist is not None and abs(self.own_goal_dist - self.DEFENCE_GOAL_DIST) > 10:
-            # If ball is behind, try to swerve around it (may trigger attack handover request anyway)
-            if self.see_ball and self.ball_dir is not None and abs(self.wrap_angle(self.own_goal_dir - self.ball_dir)) < 20:
+        elif self.bot_position is None or self.own_goal_position() is None:
+            # No localisation fix yet; fall back to camera-only behaviour.
+            if self.see_ball:
                 self.ball_capture()
             else:
-                self.move_dir = self.own_goal_dir
-                self.move_spd = self.HEAD_TO_OWN_GOAL_SPD
-        else:
-            if self.see_ball:
-                if self.own_goal_dir is not None:
-                    self.execute_goalie()
-                else:
-                    self.ball_capture()
-            else:
-                # TODO: Stay centred
                 self.move_dir = 0
                 self.move_spd = 0
-    
-    def execute_goalie(self):
-        inline_error = self.wrap_angle(self.own_goal_dir - self.ball_dir - 180)
-        if abs(inline_error) > 30:
-            self.move_dir = 90 + np.sign(inline_error) * 90
-            self.move_spd = 1.0
         else:
+            self.execute_goalie()
+
+    def execute_goalie(self):
+        """Hold a fixed distance from the own goal and stay within
+        GOALIE_MAX_ANGLE_FROM_GOAL of its centre line, using localisation for
+        both the standing distance and the lateral tracking angle instead of
+        the noisy camera-derived goal bearing/distance."""
+        target_position = self.goalie_target_position()
+        if target_position is None or self.bot_position is None:
             self.move_dir = 0
             self.move_spd = 0
-        #self.target_yaw = self.to_absolute_dir(self.ball_dir)
+            return
 
-        # if self.ball_dir < 10 and (180 - self.goal_dir) % 360 < self.GOALIE_MAX_ANGLE_FROM_GOAL:
-        #     self.move_dir = 270
-        #     self.move_spd = 1.0
-        # elif self.ball_dir > 10 and (180 - self.goal_dir) % 360 > -self.GOALIE_MAX_ANGLE_FROM_GOAL:
-        #     self.move_dir = 90
-        #     self.move_spd = 1.0
-        # else:
-        #     self.move_dir = 0
-        #     self.move_spd = 1.0
-        # self.target_yaw = self.wrap_angle(self.bot_dir + self.ball_dir)
+        bx, by = self.bot_position
+        tx, ty = target_position
+        dx = tx - float(bx)
+        dy = ty - float(by)
+        dist_mm = math.hypot(dx, dy)
+        target_bearing = math.degrees(math.atan2(dx, dy))
+
+        # Swerve around the ball rather than driving straight through it if it
+        # sits directly on the path to the target spot and we're still far off.
+        if (
+            dist_mm > 100
+            and self.see_ball
+            and self.ball_dir is not None
+            and abs(self.wrap_angle(target_bearing - self.to_absolute_dir(self.ball_dir))) < 20
+        ):
+            self.ball_capture()
+            return
+
+        if dist_mm < 20:
+            self.move_dir = 0
+            self.move_spd = 0
+            return
+
+        self.move_dir = self.to_relative_dir(target_bearing)
+        self.move_spd = min(1.0, max(self.HEAD_TO_OWN_GOAL_SPD, dist_mm / 300.0))
 
 
     # Possession Logic
@@ -1141,6 +1214,7 @@ class Robot():
         
         if self.avoiding_wall and self.ball_dir is not None:
             #self.target_yaw = self.ball_dir
+            pass
 
     def lining_up(self):
         # print("LINING UP")

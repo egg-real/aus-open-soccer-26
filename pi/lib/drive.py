@@ -6,7 +6,7 @@ from lib.config import Config
 from lib.imu import IMU
 from math import radians, sin
 
-MAX_VELOCITY_CHANGE_PER_SEC = 5.0  # Max change in the (dx, dy) speed vector, per second.
+MAX_VELOCITY_CHANGE_PER_SEC = 3.0  # Max change in the (dx, dy) speed vector, per second.
 # Fixed drive-loop period. The yaw correction is a proportional controller, so
 # a stable, high update rate keeps it from overshooting. Pacing the loop (rather
 # than free-running) also stops it from starving other threads that share the
