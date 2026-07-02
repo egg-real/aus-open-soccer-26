@@ -68,13 +68,16 @@ class Robot():
         ## General
         self.BASE_BALL_CHASE_SPD = 0.1
         self.CLOSE_BALL_CHASE_SPD = 0.01
-        self.HEAD_TO_GOAL_SPD = 0.1
+        self.HEAD_TO_GOAL_SPD = 0.05
         self.HEAD_TO_OWN_GOAL_SPD = 0.1
         self.BALL_ORBIT_RADIUS = 14  # might be an arbitrary number
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
 
         self.READY_TO_SHOOT_ANGLE = 20  # degrees
         self.READY_TO_SHOOT_DISTANCE = 125 # Note: This is currently unused
+
+        self.CENTRE_X_TOLERANCE = 100  # mm, how close to field-centre x counts as "centred"
+        self.CENTRE_X_READY_TO_SHOOT_YAW = 10  # degrees, yaw must be within +/- this to kick while centring x
 
         self.READY_TO_REBOUND_SHOOT_ANGLE = 15
         self.READY_TO_REBOUND_SHOOT_DISTANCE = 50
@@ -108,8 +111,8 @@ class Robot():
 
         ## Goalie tuning
         self.TURN_TO_OFFENCE_BALL_DIST = 15
-        self.DEFENCE_MAXIMUM_DISTANCE_FROM_WALL = 100
-        self.DEFENCE_MINIMUM_DISTANCE_FROM_WALL = 50
+        self.DEFENCE_MAXIMUM_DISTANCE_FROM_WALL = 150
+        self.DEFENCE_MINIMUM_DISTANCE_FROM_WALL = 80
 
         # Toggles
         self.ENABLE_EDGE_BALL_HIDE = False
@@ -138,6 +141,7 @@ class Robot():
         if USE_COMM_MODULE:
             self.comm_module = CommModule(COMM_MODULE_PIN)
         self.pause_switch = Switch(board.D16, self.config)
+        self.was_paused = True
         self._recalibrate_on_resume = False
         self.goal_switch = Switch(board.D12, self.config)
         self.communication = Communication()
@@ -250,15 +254,22 @@ class Robot():
         paused_by_switch = not self.pause_switch.read()
         paused_by_comm = USE_COMM_MODULE and not self.comm_module.read()
         if paused_by_switch or paused_by_comm:
+            self.was_paused = True
             if paused_by_switch:
                 self._recalibrate_on_resume = True
+            else:
+                self._recalibrate_on_resume = False
             self.drive.stop()
             self.stop_dribbler()
             return
 
-        if self._recalibrate_on_resume:
-            self._recalibrate_on_resume = False
-            self.drive.recalibrate_yaw()
+        if self.was_paused:
+            self.was_paused = False
+            self.cameras.start_streaming()
+            if self._recalibrate_on_resume:
+                self._recalibrate_on_resume = False
+                self.target_goal = GoalColour.YELLOW if self.goal_switch.read() else GoalColour.BLUE
+                self.drive.recalibrate_yaw()
 
         # State machine
         self.execute_behaviour()
@@ -833,8 +844,8 @@ class Robot():
         self.dribble()  # Keep dribbler running
 
         if self.possession_state == PossessionState.HEADING_TO_GOAL:
-            print("Ready to kick")
-            if self.is_ready_to_shoot() or self.is_ready_to_rebound_shoot():
+            if self.is_ready_to_shoot() or (self.is_ready_to_rebound_shoot() and self.ENABLE_REBOUND_SHOT):
+                print("Ready to kick")
                 self.stop_dribbler()
                 self.kick()
                 self.possession_state = PossessionState.NONE
@@ -845,6 +856,7 @@ class Robot():
                 # orbiting the ball toward target_yaw, and is_ready_to_shoot kicks.
                 self.move_dir = self.goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
+                print(self.goal_dir, self.bot_dir)
                 self.target_yaw = self.to_absolute_dir(self.goal_dir)
             elif self.see_own_goal and self.own_goal_dir is not None:
                 print("don't see goal; trying to head towards goal based on own goal")
@@ -853,8 +865,8 @@ class Robot():
                 self.move_spd = self.HEAD_TO_GOAL_SPD
                 #self.target_yaw = self.to_absolute_dir(away_from_own_goal_dir)
             else:
-                print("Can't see either ball; trying to find centre")
-                self.try_to_find_centre()
+                print("Can't see either goal; centring x and kicking when aligned")
+                self.try_to_centre_x()
 
         elif self.possession_state == PossessionState.BALL_HIDING:
             # Can normally shoot
@@ -1155,7 +1167,7 @@ class Robot():
         else:
             self.dribble()
             self.move_dir = 0
-            self.move_spd = 0.05
+            self.move_spd = 0.2
     
     def try_to_find_centre(self):
         if self.bot_position is None:
@@ -1184,12 +1196,49 @@ class Robot():
         self.move_dir = self.to_relative_dir(absolute_dir)
         self.move_spd = min(self.HEAD_TO_GOAL_SPD, max(0.03, dist_mm / 1000.0 * self.HEAD_TO_GOAL_SPD))
 
+    def try_to_centre_x(self):
+        """When holding the ball but neither goal is visible, only correct the
+        x position (ignore y) and kick once x is centred and yaw is near 0."""
+        self.target_yaw = 0
+
+        if self.bot_position is None:
+            self.move_dir = 0
+            self.move_spd = 0
+            return
+
+        x, _ = self.bot_position
+        if x is None:
+            self.move_dir = 0
+            self.move_spd = 0
+            return
+
+        centre_x = FIELD_X / 2.0
+        dx = centre_x - float(x)
+        x_centred = abs(dx) < self.CENTRE_X_TOLERANCE
+        yaw_centred = abs(self.wrap_angle(self.bot_dir)) < self.CENTRE_X_READY_TO_SHOOT_YAW
+
+        if x_centred and yaw_centred:
+            print("X centred and yaw aligned; kicking")
+            self.stop_dribbler()
+            self.kick()
+            self.possession_state = PossessionState.NONE
+            return
+
+        if x_centred:
+            self.move_dir = 0
+            self.move_spd = 0
+            return
+
+        absolute_dir = 90 if dx > 0 else -90
+        self.move_dir = self.to_relative_dir(absolute_dir)
+        self.move_spd = min(self.HEAD_TO_GOAL_SPD, max(0.03, abs(dx) / 1000.0 * self.HEAD_TO_GOAL_SPD))
+
     # ------ Action Functions ------ #
 
     def move(self):
         move_dir, move_spd, target_yaw = self.enforce_wall_boundaries(self.move_dir, self.move_spd, 9)
         move_dir, move_spd = self.avoid_wall(move_dir, move_spd)
-        print(move_dir, move_spd, target_yaw, self.have_ball)
+        # print(move_dir, move_spd, target_yaw, self.have_ball)
         self.drive.move(move_dir, move_spd, target_yaw, self.have_ball)
     
     def closest_wall(self):

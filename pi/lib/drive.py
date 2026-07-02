@@ -13,7 +13,7 @@ MAX_VELOCITY_CHANGE_PER_SEC = 5.0  # Max change in the (dx, dy) speed vector, pe
 # CPU/I2C bus (e.g. localisation), which previously made yaw correction oscillate.
 DRIVE_LOOP_PERIOD = 0.005
 YAW_CORRECT_THRESHOLD = 3.0
-YAW_CORRECT_SPEED = 0.8
+YAW_CORRECT_SPEED = 0.2
 POSSESSION_YAW_CORRECT_SPEED = 0.1
 YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle yaw correction will be at the maximum speed.
 YAW_CORRECT_ACCELERATION = 0.2
@@ -40,7 +40,7 @@ def wrap_angle(theta):
         return None
     return (theta + 180) % 360 - 180
 
-def capture_startup_yaw(imu:IMU, sample_count=25, sample_interval=0.02):
+def capture_startup_yaw(imu:IMU, sample_count=25, sample_interval=0.04):
     """Average a short burst of IMU samples so startup yaw is not just the first reading."""
     print("Stabilizing IMU yaw reference...")
     sin_sum = 0.0
