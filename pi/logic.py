@@ -828,7 +828,7 @@ class Robot():
                 # orbiting the ball toward target_yaw, and is_ready_to_shoot kicks.
                 self.move_dir = self.goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
-                self.target_yaw = self.to_absolute_dir(self.goal_dir)
+                self.target_yaw = self.goal_dir
             elif self.see_own_goal and self.own_goal_dir is not None:
                 away_from_own_goal_dir = self.wrap_angle(self.own_goal_dir + 180)
                 self.move_dir = away_from_own_goal_dir
