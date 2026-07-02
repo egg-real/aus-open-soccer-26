@@ -993,6 +993,9 @@ class Robot():
         else:
             ball_dir = self.last_ball_dir
             ball_dist = self.last_ball_dist
+        
+        if self.see_ball and self.ball_dist is not None and self.ball_dist > 50:
+            self.stop_dribbler()
 
         # Speed scales with distance; BASE_BALL_CHASE_SPD applies at 2x orbit radius
         self.move_spd = max(
@@ -1043,7 +1046,7 @@ class Robot():
             self.move_spd = math.sqrt(move_vel_x**2 + move_vel_y**2) # Calculate magnitude of movement vector
             # self.target_yaw = self.wrap_angle(self.ball_dir + self.bot_dir)
 
-            if ball_dist < 50 or self.have_ball:
+            if not self.see_ball or ball_dist < 50 or self.have_ball:
                 self.dribble()
         else:
             self.dribble()
