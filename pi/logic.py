@@ -782,7 +782,7 @@ class Robot():
         else:
             self.move_dir = 0
             self.move_spd = 0
-        self.target_yaw = self.to_absolute_dir(self.ball_dir)
+        #self.target_yaw = self.to_absolute_dir(self.ball_dir)
 
         # if self.ball_dir < 10 and (180 - self.goal_dir) % 360 < self.GOALIE_MAX_ANGLE_FROM_GOAL:
         #     self.move_dir = 270
@@ -1128,7 +1128,7 @@ class Robot():
                     self.move_spd *= 2 - max(0.5, min(1.5, distance_rate / expected_closing_rate)) # Adjust movement speed (boost is ball is moving away, slow down if ball is moving closer)
         
         if self.avoiding_wall and self.ball_dir is not None:
-            self.target_yaw = self.ball_dir
+            #self.target_yaw = self.ball_dir
 
     def lining_up(self):
         # print("LINING UP")
@@ -1187,7 +1187,7 @@ class Robot():
     # ------ Action Functions ------ #
 
     def move(self):
-        move_dir, move_spd, target_yaw = self.enforce_wall_boundaries(self.move_dir, self.move_spd, self.target_yaw)
+        move_dir, move_spd, target_yaw = self.enforce_wall_boundaries(self.move_dir, self.move_spd, 9)
         move_dir, move_spd = self.avoid_wall(move_dir, move_spd)
         print(move_dir, move_spd, target_yaw, self.have_ball)
         self.drive.move(move_dir, move_spd, target_yaw, self.have_ball)
