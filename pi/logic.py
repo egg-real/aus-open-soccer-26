@@ -634,7 +634,7 @@ class Robot():
     def execute_behaviour(self):
         """Execute behaviour based on robot role"""
         self.target_yaw = 0
-        print(f"State: {self.state.name}")
+        # print(f"State: {self.state.name}")
 
         if self.mode == RobotMode.OFFENCE:
             self.update_offence_state()

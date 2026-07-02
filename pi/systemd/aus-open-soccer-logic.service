@@ -1,0 +1,22 @@
+[Unit]
+Description=Aus Open Soccer robot control logic
+Documentation=file://@WORKDIR@/logic.py
+After=network.target local-fs.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@WORKDIR@
+ExecStart=@PYTHON@ logic.py
+ExecStopPost=@PYTHON@ stop.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# GPIO, I2C, SPI, and UART access
+SupplementaryGroups=gpio i2c spi dialout
+
+[Install]
+WantedBy=multi-user.target
