@@ -138,7 +138,7 @@ class Robot():
         if USE_COMM_MODULE:
             self.comm_module = CommModule(COMM_MODULE_PIN)
         self.pause_switch = Switch(board.D16, self.config)
-        self._was_paused = False
+        self._recalibrate_on_resume = False
         self.goal_switch = Switch(board.D12, self.config)
         self.communication = Communication()
         self.tofs = (ToF(0x50), ToF(0x51), ToF(0x52), ToF(0x53))
@@ -247,15 +247,17 @@ class Robot():
         if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
 
-        paused = (not self.pause_switch.read()) or (USE_COMM_MODULE and not self.comm_module.read())
-        if paused:
+        paused_by_switch = not self.pause_switch.read()
+        paused_by_comm = USE_COMM_MODULE and not self.comm_module.read()
+        if paused_by_switch or paused_by_comm:
+            if paused_by_switch:
+                self._recalibrate_on_resume = True
             self.drive.stop()
             self.stop_dribbler()
-            self._was_paused = True
             return
 
-        if self._was_paused:
-            self._was_paused = False
+        if self._recalibrate_on_resume:
+            self._recalibrate_on_resume = False
             self.drive.recalibrate_yaw()
 
         # State machine
