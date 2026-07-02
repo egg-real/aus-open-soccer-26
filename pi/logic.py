@@ -831,23 +831,27 @@ class Robot():
         self.dribble()  # Keep dribbler running
 
         if self.possession_state == PossessionState.HEADING_TO_GOAL:
+            print("Ready to kick")
             if self.is_ready_to_shoot() or self.is_ready_to_rebound_shoot():
                 self.stop_dribbler()
                 self.kick()
                 self.possession_state = PossessionState.NONE
                 return
             if self.see_goal and self.goal_dir is not None:
+                print("see goal; trying to move and yaw correct towards goal")
                 # Head toward the goal; the possession orbit in Drive aims us by
                 # orbiting the ball toward target_yaw, and is_ready_to_shoot kicks.
                 self.move_dir = self.goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
                 self.target_yaw = self.to_absolute_dir(self.goal_dir)
             elif self.see_own_goal and self.own_goal_dir is not None:
+                print("don't see goal; trying to head towards goal based on own goal")
                 away_from_own_goal_dir = self.wrap_angle(self.own_goal_dir + 180)
                 self.move_dir = away_from_own_goal_dir
                 self.move_spd = self.HEAD_TO_GOAL_SPD
-                self.target_yaw = self.to_absolute_dir(away_from_own_goal_dir)
+                #self.target_yaw = self.to_absolute_dir(away_from_own_goal_dir)
             else:
+                print("Can't see either ball; trying to find centre")
                 self.try_to_find_centre()
 
         elif self.possession_state == PossessionState.BALL_HIDING:
