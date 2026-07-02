@@ -83,6 +83,12 @@ class Robot():
         self.GOALIE_MAX_ANGLE_FROM_GOAL = 15
         self.DEFENCE_GOAL_DIST = 80
 
+        ## Wall boundary safety (hard floor near a wall, via localisation)
+        self.MIN_DIST_FROM_FRONT_WALL = 50  # cm, never get closer than this to whichever wall the bot's front currently faces
+        self.MIN_DIST_FROM_BACK_GOAL = 50  # cm, offence-only floor from the wall behind the bot's own ("back") goal
+        self.WALL_BOUNDARY_BLOCK_SPD = 0.15  # Speed used to slide along a boundary line to block the ball
+        self.WALL_BOUNDARY_CORRECTION_KP = 0.02  # P gain pushing the bot back to the boundary line if it dips inside it
+
         self.DRIBBLER_ROT_SPD = 1.0
         self.POSSESSION_ROT_SPD = 0.1
         self.SPIN_SHOT_SPEED = 0.4
@@ -132,6 +138,7 @@ class Robot():
         if USE_COMM_MODULE:
             self.comm_module = CommModule(COMM_MODULE_PIN)
         self.pause_switch = Switch(board.D16, self.config)
+        self._was_paused = False
         self.goal_switch = Switch(board.D12, self.config)
         self.communication = Communication()
         self.tofs = (ToF(0x50), ToF(0x51), ToF(0x52), ToF(0x53))
@@ -240,10 +247,16 @@ class Robot():
         if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
 
-        if self.pause_switch.read() or (USE_COMM_MODULE and not self.comm_module.read()):
+        paused = self.pause_switch.read() or (USE_COMM_MODULE and not self.comm_module.read())
+        if paused:
             self.drive.stop()
             self.stop_dribbler()
+            self._was_paused = True
             return
+
+        if self._was_paused:
+            self._was_paused = False
+            self.drive.recalibrate_yaw()
 
         # State machine
         self.execute_behaviour()
@@ -981,6 +994,91 @@ class Robot():
     def wall_dist(self, relative_angle):
         return self.field_wall_dist(self.to_absolute_dir(relative_angle))
 
+    def own_goal_wall_bearing(self):
+        """Absolute field bearing (deg) from the bot toward the wall behind its own ("back") goal."""
+        if self.target_goal == GoalColour.YELLOW:
+            return -90.0  # Own (Blue) goal sits on the West wall
+        if self.target_goal == GoalColour.BLUE:
+            return 90.0  # Own (Yellow) goal sits on the East wall
+        return None
+
+    def own_goal_wall_dist(self):
+        """Distance (cm) from the bot to the wall behind its own goal, via localisation."""
+        wall_dists = self.axis_wall_dists()
+        if self.target_goal == GoalColour.YELLOW:
+            return wall_dists["W"]
+        if self.target_goal == GoalColour.BLUE:
+            return wall_dists["E"]
+        return None
+
+    def enforce_wall_boundaries(self, move_dir, move_spd, target_yaw):
+        """Hard floor so the bot never drives within MIN_DIST_FROM_FRONT_WALL of
+        whichever wall its front currently faces (both modes), or - in offence
+        mode only - within MIN_DIST_FROM_BACK_GOAL of the wall behind its own
+        goal. Overrides the intended movement for the cycle if violated.
+        """
+        if self.mode == RobotMode.PENALTY:
+            return move_dir, move_spd, target_yaw
+
+        front_dist = self.wall_dist(0)
+        if front_dist is not None and front_dist < self.MIN_DIST_FROM_FRONT_WALL:
+            return self.hold_wall_boundary(self.bot_dir, self.MIN_DIST_FROM_FRONT_WALL, front_dist)
+
+        if self.mode == RobotMode.OFFENCE:
+            back_bearing = self.own_goal_wall_bearing()
+            back_dist = self.own_goal_wall_dist()
+            if back_bearing is not None and back_dist is not None and back_dist < self.MIN_DIST_FROM_BACK_GOAL:
+                return self.hold_wall_boundary(back_bearing, self.MIN_DIST_FROM_BACK_GOAL, back_dist)
+
+        return move_dir, move_spd, target_yaw
+
+    def hold_wall_boundary(self, wall_bearing, min_dist, wall_dist):
+        """Shared response for being nearer than `min_dist` to a boundary wall.
+
+        With the ball: stop advancing into the wall, aim at the target goal and
+        shoot as soon as lined up. Without the ball: if the ball is roughly
+        between the bot and the wall, slide sideways along the min_dist line to
+        stay in front of it - the same way the goalie blocks a ball
+        approaching from the left or right.
+        """
+        if self.have_ball:
+            self.dribble()
+            target_yaw = self.target_yaw
+            if self.see_goal and self.goal_dir is not None:
+                target_yaw = self.to_absolute_dir(self.goal_dir)
+            if self.is_ready_to_shoot() or self.is_ready_to_rebound_shoot():
+                self.stop_dribbler()
+                self.kick()
+                self.possession_state = PossessionState.NONE
+            return 0, 0, target_yaw
+
+        wall_error = max(0.0, min_dist - wall_dist)  # > 0 while still too close
+        away_from_wall = self.wrap_angle(wall_bearing + 180)
+        correction_strength = min(1.0, self.WALL_BOUNDARY_CORRECTION_KP * wall_error)
+
+        ball_dir = self.ball_dir if self.see_ball else self.last_ball_dir
+        if ball_dir is None:
+            away_rel = math.radians(self.to_relative_dir(away_from_wall))
+            move_dir = math.degrees(math.atan2(math.sin(away_rel), math.cos(away_rel)))
+            return move_dir, correction_strength, self.target_yaw
+
+        ball_abs_dir = self.to_absolute_dir(ball_dir)
+        lateral_sign = np.sign(self.wrap_angle(ball_abs_dir - wall_bearing))
+        if lateral_sign == 0:
+            lateral_sign = 1
+        tangent_dir = self.wrap_angle(wall_bearing + 90 * lateral_sign)
+
+        tangent_rel = math.radians(self.to_relative_dir(tangent_dir))
+        away_rel = math.radians(self.to_relative_dir(away_from_wall))
+
+        move_x = self.WALL_BOUNDARY_BLOCK_SPD * math.sin(tangent_rel) + correction_strength * math.sin(away_rel)
+        move_y = self.WALL_BOUNDARY_BLOCK_SPD * math.cos(tangent_rel) + correction_strength * math.cos(away_rel)
+
+        move_dir = math.degrees(math.atan2(move_x, move_y))
+        move_spd = min(math.hypot(move_x, move_y), 1.0)
+        target_yaw = self.to_absolute_dir(ball_dir)
+        return move_dir, move_spd, target_yaw
+
     def ball_capture(self):
 
         """Go around ball and try to capture it with dribbler"""
@@ -1083,48 +1181,26 @@ class Robot():
     # ------ Action Functions ------ #
 
     def move(self):
-        move_dir, move_spd = self.avoid_wall(self.move_dir, self.move_spd)
-        print(move_dir, move_spd, self.target_yaw, self.have_ball)
-        self.drive.move(move_dir, move_spd, self.target_yaw, self.have_ball)
+        move_dir, move_spd, target_yaw = self.enforce_wall_boundaries(self.move_dir, self.move_spd, self.target_yaw)
+        move_dir, move_spd = self.avoid_wall(move_dir, move_spd)
+        print(move_dir, move_spd, target_yaw, self.have_ball)
+        self.drive.move(move_dir, move_spd, target_yaw, self.have_ball)
     
     def closest_wall(self):
-        """Return the closest actual field-wall normal and distance in cm."""
-        tof_readings = (
-            (0, self.tofs[0].read()),
-            (90, self.tofs[1].read()),
-            (180, self.tofs[2].read()),
-            (-90, self.tofs[3].read()),
-        )
-        wall_normals = (0, 90, 180, -90)
+        """Return the closest field-wall normal (absolute bearing) and distance
+        in cm, from the localised bot position rather than raw ToF reads."""
+        wall_dists = self.axis_wall_dists()
+        wall_normals = {"N": 0, "E": 90, "S": 180, "W": -90}
 
         closest_normal = None
         closest_dist = None
-        for wall_normal in wall_normals:
-            best_alignment = None
-            best_distance = None
-
-            for sensor_dir, distance_mm in tof_readings:
-                if distance_mm is None or distance_mm <= 0:
-                    continue
-
-                sensor_abs_dir = self.wrap_angle(self.bot_dir + sensor_dir)
-                sensor_to_wall_angle = self.wrap_angle(sensor_abs_dir - wall_normal)
-                alignment = math.cos(math.radians(sensor_to_wall_angle))
-                if alignment <= 0:
-                    continue
-
-                # Project the angled ToF ray onto the real wall normal.
-                distance_cm = (distance_mm / 10) * alignment
-                if best_alignment is None or alignment > best_alignment:
-                    best_alignment = alignment
-                    best_distance = distance_cm
-
-            if best_distance is None:
+        for side, wall_normal in wall_normals.items():
+            distance_cm = wall_dists[side]
+            if distance_cm is None:
                 continue
-
-            if closest_dist is None or best_distance < closest_dist:
+            if closest_dist is None or distance_cm < closest_dist:
                 closest_normal = wall_normal
-                closest_dist = best_distance
+                closest_dist = distance_cm
 
         return closest_normal, closest_dist
 

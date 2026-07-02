@@ -87,6 +87,10 @@ class Drive:
         self.drive_thread = threading.Thread(target=self._drive_loop, daemon=True)
         self.drive_thread.start()
 
+    def recalibrate_yaw(self):
+        """Re-sample the IMU yaw reference (e.g. after unpausing)."""
+        self.initial_yaw = capture_startup_yaw(self.imu)
+
     def move(self, angle, speed=0.5, rotation=0, possession=False): # rotation is the desired yaw value
         with self.target_lock:
             self.target_direction = angle
