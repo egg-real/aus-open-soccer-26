@@ -13,10 +13,11 @@ MAX_VELOCITY_CHANGE_PER_SEC = 5.0  # Max change in the (dx, dy) speed vector, pe
 # CPU/I2C bus (e.g. localisation), which previously made yaw correction oscillate.
 DRIVE_LOOP_PERIOD = 0.005
 YAW_CORRECT_THRESHOLD = 3.0
-YAW_CORRECT_SPEED = 0.4
+YAW_CORRECT_SPEED = 0.8
 POSSESSION_YAW_CORRECT_SPEED = 0.1
 YAW_CORRECT_MAX_SPEED_THRESHOLD = 60 # If the error is greater than this angle yaw correction will be at the maximum speed.
-YAW_CORRECT_ACCELERATION = 0.1
+YAW_CORRECT_ACCELERATION = 0.2
+POSSESSION_YAW_CORRECT_ACCELERATION = 0.05
 # Derivative (damping) term. The correction is otherwise pure-proportional, which
 # overshoots when the yaw feedback lags (e.g. IMU starved by I2C contention).
 # Subtracting a term proportional to how fast the error is closing damps that
@@ -133,10 +134,21 @@ class Drive:
 
         with self.target_lock:
             target_rotation = self.target_rotation
+            yaw_correct_acceleration = (
+                POSSESSION_YAW_CORRECT_ACCELERATION
+                if self.possession
+                else YAW_CORRECT_ACCELERATION
+            )
             if self.target_yaw_correct_speed > self._last_yaw_correct_speed:
-                self._last_yaw_correct_speed += dt * YAW_CORRECT_ACCELERATION
-            else:
-                self._last_yaw_correct_speed = self.target_yaw_correct_speed
+                self._last_yaw_correct_speed = min(
+                    self._last_yaw_correct_speed + dt * yaw_correct_acceleration,
+                    self.target_yaw_correct_speed,
+                )
+            elif self.target_yaw_correct_speed < self._last_yaw_correct_speed:
+                self._last_yaw_correct_speed = max(
+                    self._last_yaw_correct_speed - dt * yaw_correct_acceleration,
+                    self.target_yaw_correct_speed,
+                )
 
         yaw_error = wrap_angle(target_rotation - self.yaw)
 

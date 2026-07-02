@@ -247,7 +247,7 @@ class Robot():
         if self.see_ball or self.have_ball:
             self.last_ball_see_time = time.monotonic()
 
-        paused = self.pause_switch.read() or (USE_COMM_MODULE and not self.comm_module.read())
+        paused = (not self.pause_switch.read()) or (USE_COMM_MODULE and not self.comm_module.read())
         if paused:
             self.drive.stop()
             self.stop_dribbler()
