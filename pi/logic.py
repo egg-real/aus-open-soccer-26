@@ -41,7 +41,7 @@ class PossessionState(Enum):
     NONE = -1
     HEADING_TO_GOAL = 0
     BALL_HIDING = 1
-    SPIN_SHOOT = 2 # Not coded yet
+    FLICK_SHOT = 2 # Not coded yet
 
 class GoalColour(Enum):
     BLUE = "Blue"
@@ -73,7 +73,7 @@ class Robot():
         self.BALL_ORBIT_RADIUS = 14  # might be an arbitrary number
         self.GIVE_UP_CHASING_BALL_TIME = 0.5 # seconds
 
-        self.READY_TO_SHOOT_ANGLE = 15  # degrees
+        self.READY_TO_SHOOT_ANGLE = 20  # degrees
         self.READY_TO_SHOOT_DISTANCE = 125 # Note: This is currently unused
 
         self.READY_TO_REBOUND_SHOOT_ANGLE = 15
@@ -81,7 +81,7 @@ class Robot():
         self.REBOUND_SHOOT_PRECISION = 0.5 # Somewhere inbetween 0 and 2, lower the more precise
 
         self.GOALIE_MAX_ANGLE_FROM_GOAL = 15
-        self.DEFENCE_GOAL_DIST = 100
+        self.DEFENCE_GOAL_DIST = 80
 
         self.DRIBBLER_ROT_SPD = 1.0
         self.POSSESSION_ROT_SPD = 0.1
@@ -808,7 +808,7 @@ class Robot():
         if self.possession_state == PossessionState.BALL_HIDING:
             return
 
-        if self.possession_state == PossessionState.SPIN_SHOOT:
+        if self.possession_state == PossessionState.FLICK_SHOT:
             print("No code for this yet, please set ENABLE_FLICK_SHOT to False")
             return
 
@@ -818,7 +818,7 @@ class Robot():
         self.dribble()  # Keep dribbler running
 
         if self.possession_state == PossessionState.HEADING_TO_GOAL:
-            if self.is_ready_to_shoot():
+            if self.is_ready_to_shoot() or self.is_ready_to_rebound_shoot():
                 self.stop_dribbler()
                 self.kick()
                 self.possession_state = PossessionState.NONE
@@ -888,7 +888,7 @@ class Robot():
                 self.move_spd = min(math.hypot(move_x, move_y), 1)
                     
 
-        elif self.possession_state == PossessionState.SPIN_SHOOT:
+        elif self.possession_state == PossessionState.FLICK_SHOT:
             print("No code for this yet, please set ENABLE_FLICK_SHOT to False")
             self.move_dir = 0
             self.move_spd = 0
